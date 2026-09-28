@@ -41,9 +41,14 @@ export function WorkflowComposer(props: {
   onUpload: (files: File[]) => void
   onGenerate: () => void
   onReset: () => void
+  onDraw?: () => void
 }) {
   const { t } = useTranslation()
   const editing = props.draft.mode === 'edit'
+  const uploads = props.draft.queued
+    ? props.config.qwen_queue_enabled && props.config.qwen_access
+    : props.config.upload_enabled
+  const referenceLimit = props.draft.queued ? 10 : 3
   const models = editing ? props.imageToImageModels : props.textToImageModels
   const form = useForm<WorkflowDraft>({
     values: props.draft,
@@ -53,7 +58,8 @@ export function WorkflowComposer(props: {
     props.onChange({ ...props.draft, ...patch })
   const valid =
     draftSchema.safeParse(props.draft).success &&
-    models.includes(props.draft.model)
+    models.includes(props.draft.model) &&
+    (!props.draft.queued || !!props.config.qwen_access)
   return (
     <form
       className='space-y-4'
@@ -152,7 +158,8 @@ export function WorkflowComposer(props: {
               accept='image/png,image/jpeg,image/webp'
               multiple
               disabled={
-                props.busy || props.draft.references.length >= 3
+                props.busy ||
+                props.draft.references.length >= referenceLimit
               }
               onChange={(event) => {
                 props.onUpload([...(event.target.files ?? [])])
@@ -161,8 +168,22 @@ export function WorkflowComposer(props: {
             />
           </label>
           <p className='text-muted-foreground text-xs'>
-            {t('PNG, JPEG or WebP · up to 10 MB each · maximum 3 references')}
+            {t(
+              props.draft.queued
+                ? 'PNG, JPEG or WebP · up to 10 references · 16 MB total request'
+                : 'PNG, JPEG or WebP · up to 10 MB each · maximum 3 references'
+            )}
           </p>
+          {props.draft.queued && props.draft.references.length > 0 && (
+            <Button
+              type='button'
+              variant='outline'
+              disabled={props.busy}
+              onClick={props.onDraw}
+            >
+              {t('Edit with colored strokes')}
+            </Button>
+          )}
         </section>
       )}
       {props.draft.parent_id && (
@@ -199,7 +220,7 @@ export function WorkflowComposer(props: {
             disabled={props.busy}
             onChange={(event) => update({ count: Number(event.target.value) })}
           >
-            {[1, 2, 3, 4].map((count) => (
+            {(props.draft.queued ? [1] : [1, 2, 3, 4]).map((count) => (
               <option key={count}>{count}</option>
             ))}
           </select>
@@ -208,31 +229,93 @@ export function WorkflowComposer(props: {
       <p className='text-muted-foreground text-xs'>
         {t('Supported sizes and image counts depend on the selected provider.')}
       </p>
-      <div className='space-y-1'>
-        <span className='block text-sm'>{t('Quality')}</span>
-        <RadioGroup
-          aria-label={t('Quality')}
-          value={props.draft.quality}
-          onValueChange={(value) => update({ quality: value as Quality })}
-          disabled={props.busy}
-          className='grid-cols-3'
-        >
-          {QUALITY_OPTIONS.map((option) => (
-            <div key={option.id} className='flex items-center gap-2'>
-              <RadioGroupItem
-                value={option.id}
-                id={`workflow-quality-${option.id}`}
+      {props.draft.queued ? (
+        <details>
+          <summary>{t('Advanced settings')}</summary>
+          <div className='mt-2 grid grid-cols-3 gap-2'>
+            <label>
+              {t('Steps')}
+              <Input
+                type='number'
+                min={1}
+                max={60}
+                value={props.draft.steps ?? 40}
+                disabled={props.busy}
+                onChange={(event) =>
+                  update({
+                    steps:
+                      event.target.value === ''
+                        ? Number.NaN
+                        : Number(event.target.value),
+                  })
+                }
               />
-              <label
-                htmlFor={`workflow-quality-${option.id}`}
-                className='cursor-pointer text-xs'
-              >
-                {t(option.labelKey)}
-              </label>
-            </div>
-          ))}
-        </RadioGroup>
-      </div>
+            </label>
+            <label>
+              {t('CFG')}
+              <Input
+                type='number'
+                min={0}
+                max={10}
+                step={0.1}
+                value={props.draft.cfg ?? 1}
+                disabled={props.busy}
+                onChange={(event) =>
+                  update({
+                    cfg:
+                      event.target.value === ''
+                        ? Number.NaN
+                        : Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+            <label>
+              {t('Seed')}
+              <Input
+                type='number'
+                min={0}
+                value={props.draft.seed ?? 42}
+                disabled={props.busy}
+                onChange={(event) =>
+                  update({
+                    seed:
+                      event.target.value === ''
+                        ? Number.NaN
+                        : Number(event.target.value),
+                  })
+                }
+              />
+            </label>
+          </div>
+        </details>
+      ) : (
+        <div className='space-y-1'>
+          <span className='block text-sm'>{t('Quality')}</span>
+          <RadioGroup
+            aria-label={t('Quality')}
+            value={props.draft.quality}
+            onValueChange={(value) => update({ quality: value as Quality })}
+            disabled={props.busy}
+            className='grid-cols-3'
+          >
+            {QUALITY_OPTIONS.map((option) => (
+              <div key={option.id} className='flex items-center gap-2'>
+                <RadioGroupItem
+                  value={option.id}
+                  id={`workflow-quality-${option.id}`}
+                />
+                <label
+                  htmlFor={`workflow-quality-${option.id}`}
+                  className='cursor-pointer text-xs'
+                >
+                  {t(option.labelKey)}
+                </label>
+              </div>
+            ))}
+          </RadioGroup>
+        </div>
+      )}
       <Button
         type='submit'
         className='w-full'
