@@ -38,12 +38,14 @@ func MediaStudioConfig(c *gin.Context) {
 	if model.ImageStudioAuditEnabled() {
 		retentionDays = 30
 	}
+	user, lookupErr := model.GetUserById(c.GetInt("id"), false)
+	allowed := lookupErr == nil && user != nil && user.Status == common.UserStatusEnabled && model.ImageStudioGroupAllowed(user.Group)
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{
 		"upload_enabled":       err == nil,
 		"qwen_queue_enabled":   os.Getenv("IMAGE_STUDIO_DISPATCHER_URL") != "" && len(os.Getenv("IMAGE_STUDIO_DISPATCHER_TOKEN")) >= 32,
 		"qwen_model":           os.Getenv("IMAGE_STUDIO_CHANNEL_MODEL"),
-		"qwen_access":          model.ImageStudioGroupAllowed(c.GetString("group")),
+		"qwen_access":          allowed,
 		"audit_retention_days": retentionDays,
 	})
 }

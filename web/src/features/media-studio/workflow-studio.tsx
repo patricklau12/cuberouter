@@ -23,6 +23,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { api } from '@/lib/api'
 
 import { getStudioModels } from './api'
 import { QwenEditor } from './components/qwen-editor'
@@ -35,7 +36,6 @@ import { useWorkflow } from './hooks/use-workflow'
 import { editDraft } from './lib/qwen-edit'
 import { initialDraft, templateDraft, workflowError } from './lib/workflow'
 import { localImage, referenceAsset } from './workflow-api'
-import { api } from '@/lib/http-client'
 import type { WorkflowConfig, WorkflowDraft } from './workflow-types'
 
 export function WorkflowStudio(props: { owner: number }) {
@@ -53,7 +53,12 @@ export function WorkflowStudio(props: { owner: number }) {
   })
   const configuration = useQuery({
     queryKey: ['studio-config', props.owner],
-    queryFn: async () => (await api.get<WorkflowConfig>('/api/media-studio/config', { skipErrorHandler: true })).data,
+    queryFn: async () =>
+      (
+        await api.get<WorkflowConfig>('/api/media-studio/config', {
+          skipErrorHandler: true,
+        })
+      ).data,
     retry: false,
   })
   const config = configuration.data ?? {}
@@ -241,7 +246,6 @@ export function WorkflowStudio(props: { owner: number }) {
                 {queued && (
                   <QwenExamples
                     draft={current}
-              config={config}
                     disabled={busy || !config.qwen_access}
                     onApply={setDraft}
                   />

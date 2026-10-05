@@ -15,10 +15,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 import base64
 import json
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -94,6 +94,7 @@ class ChannelTests(unittest.TestCase):
         self.addCleanup(queue.stop)
         queue.start()
         p = {'model': '2.1', 'prompt': 'Keep exact prompt'}
+        before = int(time.time())
         job, _ = queue.submit('cuberouter-71', 'request-12345678', p)
         queue.submit('cuberouter-71', 'request-12345678', p)
         wait_for(lambda: queue.status('cuberouter-71', job['id'])['state'] == 'completed')
@@ -103,6 +104,8 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(headers['X-Image-Owner'], 'cuberouter-71')
         self.assertEqual(headers['X-Image-Job'], job['id'])
         self.assertEqual(headers['Authorization'], 'Bearer ' + 's'*40)
+        self.assertGreaterEqual(int(headers['X-Image-Execution-Deadline']), before+1500)
+        self.assertLessEqual(int(headers['X-Image-Execution-Deadline']), int(time.time())+1500)
         self.assertEqual(json.loads(body), p)
         self.assertEqual(queue.result('cuberouter-71', job['id']), PNG)
         queue.ack('cuberouter-71', job['id'])

@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 """Private OpenAI image adapter for the POC /generate worker; RAM only.
 
 Existing OpenAI-compatible image providers do not need this bridge. Configure

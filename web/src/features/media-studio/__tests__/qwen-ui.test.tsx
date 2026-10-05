@@ -147,9 +147,10 @@ test('colored editing submits the canvas bytes as the sole reference and retains
     />
   )
   fireEvent.click(screen.getByRole('button', { name: 'White' }))
-  expect(
-    screen.getByRole('button', { name: 'White' })
-  ).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'White' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  )
   fireEvent.change(
     screen.getByRole('textbox', { name: 'Describe your changes' }),
     { target: { value: 'Add a diver at every white mark' } }

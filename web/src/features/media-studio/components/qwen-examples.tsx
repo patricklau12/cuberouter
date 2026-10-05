@@ -21,6 +21,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { withBasePath } from '@/lib/base-path'
 
 import { exampleReferences } from '../lib/qwen-examples'
 import catalog from '../official-examples.json'
@@ -54,7 +55,9 @@ export function QwenExamples(props: {
         {catalog.examples.map((example) => (
           <article key={example.id} className='space-y-3 rounded-xl border p-3'>
             <img
-              src={`/image-studio/official-qwen21/${example.preview.replace('.png', '-preview.jpg')}`}
+              src={withBasePath(
+                `/image-studio/official-qwen21/${example.preview.replace('.png', '-preview.jpg')}`
+              )}
               alt={t(example.title)}
               loading='lazy'
               className='h-48 w-full rounded-lg object-contain'

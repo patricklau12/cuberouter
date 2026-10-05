@@ -134,8 +134,7 @@ export function imageRequest(
   if (draft.mode === 'edit' && referenceURLs.length) {
     // 编辑渠道只认内联 base64：参考图在 draft 里本来就是 data URL，直接下发，
     // 多张时用数组。下发网址会被上游按 base64 解码，报 Incorrect padding。
-    body.image =
-      referenceURLs.length === 1 ? referenceURLs[0] : referenceURLs
+    body.image = referenceURLs.length === 1 ? referenceURLs[0] : referenceURLs
   }
   return body
 }

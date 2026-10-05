@@ -112,6 +112,13 @@ export function QwenEditor(props: {
             'Edit the prompt here and submit when ready. The original and output size are preserved.'
           )}
         </DialogDescription>
+        {props.draw && props.draft.references.length > 1 && (
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Colored-stroke editing sends only the first reference image. Update the prompt for that image before submitting.'
+            )}
+          </p>
+        )}
         {props.draw && (
           <div className='flex flex-wrap gap-2' aria-label={t('Stroke color')}>
             {strokeColors.map((item) => (

@@ -26,8 +26,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -103,7 +105,7 @@ func TestStudioPrivateRelayIdentityMemoryAndReplay(t *testing.T) {
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { sqlDB.Close() })
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.ImageStudioAudit{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.ImageStudioAudit{}, &model.ImageModerationPolicy{}, &model.ImageModerationLease{}))
 	require.NoError(t, db.Create(&model.User{Id: 71, Username: "studio-test", Status: common.UserStatusEnabled, Group: "trial", Quota: 100000}).Error)
 	router := gin.New()
 	calls := 0
@@ -127,6 +129,7 @@ func TestStudioPrivateRelayIdentityMemoryAndReplay(t *testing.T) {
 		r.Header.Set("Authorization", auth)
 		r.Header.Set("X-Image-Owner", owner)
 		r.Header.Set("X-Image-Job", job)
+		r.Header.Set("X-Image-Execution-Deadline", strconv.FormatInt(time.Now().Add(25*time.Minute).Unix(), 10))
 		r.Header.Set("Cookie", "browser-session=must-not-forward")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, r)

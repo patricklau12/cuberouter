@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 """Render an opt-in Compose overlay; never deploy, register channels or rotate admin keys."""
 import argparse
 import json
@@ -34,9 +33,10 @@ NETWORK = 'image-studio-private'
 
 
 def channel_ids(value):
+    if value == 'auto': return None
     parts = [part.strip() for part in value.split(',')]
-    if not 1 <= len(parts) <= 8 or any(not re.fullmatch(r'[1-9][0-9]*', part) for part in parts):
-        raise ValueError('Supply 1-8 positive channel IDs from the TARGET CubeRouter database.')
+    if not 1 <= len(parts) <= 64 or any(not re.fullmatch(r'[1-9][0-9]*', part) for part in parts):
+        raise ValueError('Supply auto or 1-64 positive channel IDs from the TARGET CubeRouter database.')
     if len(set(parts)) != len(parts):
         raise ValueError('Channel IDs must be unique, one per physical GPU.')
     return parts
@@ -69,11 +69,10 @@ def make_overlay(base, service, ids, tokens, port, image=None):
             'IMAGE_STUDIO_DISPATCHER_TOKEN': dispatcher_token,
             'IMAGE_STUDIO_RELAY_URL': f'http://{service}:{port}',
             'IMAGE_STUDIO_RELAY_TOKEN': relay_token,
-            'IMAGE_STUDIO_RELAY_CONCURRENCY': str(len(ids)),
+            'IMAGE_STUDIO_RELAY_CONCURRENCY': 'auto' if ids is None else str(len(ids)),
         },
         'healthcheck': {
-            'test': ['CMD', 'python', '-c',
-                     "import socket; socket.create_connection(('127.0.0.1',18195),2).close()"],
+            'test': ['CMD', 'python', '-B', '/app/healthcheck.py'],
             'interval': '30s', 'timeout': '5s', 'retries': 3,
         },
     }
@@ -87,7 +86,7 @@ def make_overlay(base, service, ids, tokens, port, image=None):
             'IMAGE_STUDIO_DISPATCHER_TOKEN': dispatcher_token,
             'IMAGE_STUDIO_RELAY_TOKEN': relay_token,
             'IMAGE_STUDIO_CHANNEL_MODEL': 'qwen-image-2.1',
-            'IMAGE_STUDIO_CHANNEL_IDS': ','.join(ids),
+            'IMAGE_STUDIO_CHANNEL_IDS': 'auto' if ids is None else ','.join(ids),
             'IMAGE_STUDIO_AUDIT_ENABLED': 'true',
             'IMAGE_STUDIO_ALLOWED_GROUPS': 'image-studio',
         }},
@@ -128,7 +127,7 @@ def main(argv=None):
     parser.add_argument('--project-name', required=True, help='EXISTING Docker Compose project name, not a new one')
     parser.add_argument('--gateway-service', default='cuberouter')
     parser.add_argument('--gateway-port', type=int, default=3000)
-    parser.add_argument('--channel-ids', required=True)
+    parser.add_argument('--channel-ids', default='auto', help='auto follows Channel Management; explicit IDs retain a fixed pool')
     parser.add_argument('--output', required=True, help='Private directory OUTSIDE the checkout, reused on subsequent runs')
     parser.add_argument('--dispatcher-image', help='Matching released dispatcher image; omit to build the checked-out source')
     args = parser.parse_args(argv)
@@ -156,7 +155,8 @@ def main(argv=None):
     if verified.returncode:
         raise ValueError('Generated Compose overlay failed validation; do not deploy it.')
     print(f'Validated overlay: {destination}')
-    print(f'GPU channels: {len(ids)}; one gateway replica; audit enabled; dispatcher has no public ports.')
+    count = len(ids) if ids is not None else 'automatic'
+    print(f'GPU channels: {count}; one gateway replica; audit enabled; dispatcher has no public ports.')
     print('No service or channel was changed. After confirming worker connectivity and the gateway image version:')
     print(shlex.join(command + ['up', '-d', '--build', '--no-deps', DISPATCHER, args.gateway_service]))
     print('Use this same full Compose command for later updates. Do not run it with a new project name.')

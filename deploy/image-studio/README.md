@@ -1,81 +1,73 @@
 # Qwen Image 2.1 in CubeRouter Media Studio
 
-Opt-in Qwen generation and editing at `/media-studio`, alongside existing image
-providers: ten reference images, official examples, freehand colored strokes,
-continued editing with retained dimensions, account-isolated browser history,
-and a recoverable FIFO queue. Loading an example never starts generation.
+Latest HKBN functionality adapted to CubeRouter React 19 / TypeScript: ten
+references, official examples loaded as drafts, freehand colored strokes without
+automatic closure, continued editing with retained dimensions, browser history,
+shared generation/API queue, dynamic GPU channels, Gemma review and audit UI.
 
-[Deployment instructions](DEPLOYMENT.md)
+Start with [DEPLOYMENT.md](DEPLOYMENT.md); API integration and independent
+per-group moderation policy are in [API-QUEUE.md](API-QUEUE.md).
 
 ```mermaid
 flowchart LR
-    Browser[Media Studio / IndexedDB] -->|authenticated job API| CR[CubeRouter]
-    CR -->|private token + account identity| Queue[CPU sidecar / RAM queue]
-    Queue -->|private execution callback| CR
-    API[Normal API-key clients] -->|existing token authentication| CR
-    CR -->|group + model + quota| Pool[Configured channel pool]
-    Pool --> GPU[One endpoint per GPU / existing workers]
-    CR --> Usage[Existing billing / usage logs]
-    CR --> Audit[30-day audit / main database]
+    UI[Media Studio / local history] --> CR[Public CubeRouter]
+    API[API key clients] --> CR
+    CR --> Queue[One CPU dispatcher / bounded queue]
+    Queue --> Private[One private execution gateway]
+    Private --> GPU[Live Qwen channels]
+    GPU --> Review[Gemma channels when required]
+    Review --> Private
+    Private --> Audit[30-day prompts / hashes / scores]
+    Private --> Billing[Existing account and token billing]
+    Private --> Queue
+    Queue --> CR
 ```
 
-The sidecar schedules work and holds temporary media in RAM. It does not contain
-weights, need GPUs or choose the provider. CubeRouter uses existing channels,
-group permissions, billing, model mapping and relay. `qwen_channel_bridge.py`
-documents the compatible upstream protocol; this image does not install workers.
+API review defaults to external (integrator-managed), with root-admin opt-in to
+required Gemma review per account group. Browser review follows moderation
+channels. No channel count/node IP is hardcoded.
 
-## Capacity and recovery
+## Verification
 
-- One active job per account; generation and editing share a FIFO queue.
-- Up to eight dispatch slots, matching the number of actual GPU channels.
-- ONE CubeRouter replica and one dispatcher per pool. In-process reservations
-  prevent selecting a busy channel; health is checked before generation. Normal
-  API image requests for the configured model use the same reservation pool.
-- Defaults: ten waiting jobs, 256 MiB aggregate queue/result data, 16 MiB request
-  bodies, 15-minute queue expiry, ten-minute result collection window.
-- Refresh looks up an account-scoped idempotency key. Lost responses never cause
-  automatic resubmission. A restarted sidecar loses RAM jobs; users must review
-  their saved draft before creating a new request.
-- Results are acknowledged after the browser history write succeeds. Download
-  remains available if local storage fails.
-
-Sharing eight GPUs across two installations does not add capacity. Gateways have
-separate reservations/queues; workers reject overlap, so races can fail busy.
-Uncertain executions are not retried. Split GPU allocation for simultaneous
-site tests or coordinate a cutover. Shared leases/multiple replicas are not provided.
-
-## Storage
-
-| Location | Content | Retention |
-| --- | --- | --- |
-| Browser IndexedDB, per origin/account | Images, references, prompts, parameters, original/strokes, versions; one recovery draft | Existing limit: 50 jobs / 100 MiB; no timed expiry; browser clearing/eviction can remove it |
-| Dispatcher RAM | Waiting inputs and uncollected output | Queue 15 minutes; output ten minutes or acknowledgement; lost on restart |
-| Main `SQL_DSN`, `image_studio_audits` | Account, job, user/model prompts, parameters, status, channel, SHA-256 hashes | 30 days; hidden at expiry, purged at startup/every five minutes |
-| Existing usage log database | Standard account/model/channel/quota records | Existing operator retention, unchanged |
-
-Audit requires `IMAGE_STUDIO_AUDIT_ENABLED=true` and covers Studio jobs, not all
-ordinary API calls. Audit write failures block execution. No image bytes enter
-this table. Hashes match exact files, cannot reconstruct images, and identify an
-account rather than independently proving a person's identity. Backups have their
-own retention policy.
-
-Root administrators use `GET /api/image-studio-audit` with optional `user_id`,
-`job_id`, or `output_sha256` filters (latest 50). Use normal authenticated dashboard
-API access or an appropriately scoped management credential. Inference API keys
-are not administrator credentials. This change does not add an audit dashboard.
-
-## Tests
-
-```bash
+```sh
 python -m unittest discover -s deploy/image-studio -p 'test_*.py'
-go test ./controller ./middleware ./model -run 'Test(ImageStudio|Studio|ImageChannel)' -count=1
+python -m pytest deploy/image-moderation -q
+go test ./controller ./middleware ./model -run 'Test(ImageStudio|Studio|ImageChannel|ImageAPI|ImageModeration)' -count=1
+go build -o cuberouter .
+python deploy/image-studio/smoke_api.py /absolute/path/to/cuberouter
 cd web
 bun run typecheck
-bun run test src/features/media-studio
+bun run test src/features/media-studio src/features/image-studio-audit
 bun run build
 ```
 
-`TestImageStudioDatabaseMatrix` accepts `STUDIO_TEST_MYSQL_DSN` and
-`STUDIO_TEST_POSTGRES_DSN` pointing at DISPOSABLE databases. It tests fresh and
-representative existing schemas, repeated migration, uniqueness, prompt retention
-and expiry; CI supplies both engines in addition to SQLite.
+Local smoke uses real Go/dispatcher with **simulated** GPU/Gemma; it verifies
+contracts, not inference throughput. `TestImageStudioDatabaseMatrix` accepts
+disposable `STUDIO_TEST_MYSQL_DSN` / `STUDIO_TEST_POSTGRES_DSN` alongside SQLite
+for fresh/upgrade migrations, restart, idempotent admission, policies, leases,
+private reviewers and expiry. CI supplies all three engines.
+
+### Sync validation (2026-10-05)
+
+Based on `suanova/cuberouter` main `3a460f57`, incorporating the HKBN image
+implementation through `68adec43` (including the queued API/audit work).
+The destination keeps its React 19 UI, organization billing, BASE_PATH support
+and existing reference-upload behavior. Channel type 64 is specific to this fork.
+
+- All 1,184 frontend tests passed, along with TypeScript and the production build.
+- Image-related Go controller, middleware, model, router and billing tests passed;
+  affected-package `go vet` passed.
+- 55 dispatcher tests and 21 classifier/pool tests passed.
+- Fresh/upgrade/repeated migrations passed on SQLite 3.50.4, MySQL 8.0.46 and
+  PostgreSQL 16.15, including retention, claims, policies and moderation leases.
+- Real local gateway/dispatcher with simulated GPU/reviewer passed generation,
+  multipart edits, four-account queueing, billed tokens, idempotency, async
+  polling, review approval/block/outage, group denial and ordinary chat API.
+- The full Go suite is not green on this Windows host: unrelated SQLite fixture
+  cleanup locks and channel-affinity cache assertions fail. Representative
+  failures also reproduce on untouched main `3a460f57`. CI still runs the full
+  Linux suite; this sync does not suppress those tests.
+
+No destination deployment, production channel configuration or real-GPU capacity
+acceptance is performed by these checks. Deploy and validate the matching gateway,
+web build and dispatcher in staging as described in [DEPLOYMENT.md](DEPLOYMENT.md).

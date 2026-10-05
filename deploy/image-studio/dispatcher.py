@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 """Authenticated, bounded RAM queue. No prompts, images or request bodies are logged."""
 import base64
 import binascii
@@ -25,14 +24,22 @@ import math
 import os
 import re
 import secrets
+import socket
 import threading
+import time
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.error import HTTPError
-from urllib.request import Request, ProxyHandler, build_opener
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, ProxyHandler, HTTPRedirectHandler, build_opener
 
-from queue_core import Dispatcher, Rejected, BusyBeforeAccept, UncertainExecution
+from queue_core import Dispatcher, Rejected, BusyBeforeAccept, UncertainExecution, OutputRejected
 
-HTTP = build_opener(ProxyHandler({}))
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+HTTP = build_opener(ProxyHandler({}), NoRedirect())
 
 
 def validate(p):
@@ -60,6 +67,24 @@ def validate(p):
                 raise ValueError()
         except (ValueError, binascii.Error):
             raise Rejected(400, 'invalid_image') from None
+    return p
+
+
+def validate_api(parameters):
+    # Private endpoint: the public Studio proxy does not allow /api-jobs.
+    if not isinstance(parameters, dict):
+        raise Rejected(400, 'invalid_api_identity')
+    p = dict(parameters)
+    identity = p.pop('_api', None)
+    if (not isinstance(identity, dict) or set(identity) != {'token_id', 'group', 'client_ip', 'request_id'}
+            or type(identity['token_id']) is not int or identity['token_id'] < 1
+            or not isinstance(identity['group'], str) or not 1 <= len(identity['group']) <= 64
+            or not isinstance(identity['client_ip'], str) or len(identity['client_ip']) > 64
+            or not isinstance(identity['request_id'], str)
+            or not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', identity['request_id'])):
+        raise Rejected(400, 'invalid_api_identity')
+    p = validate(p)
+    p['_api'] = identity
     return p
 
 
@@ -97,9 +122,12 @@ def channel_runner(url, token):
         raise ValueError('Configure private relay URL and token')
 
     def execute(channel, payload):
-        request = Request(url.rstrip('/') + '/internal/image-studio/execute', data=payload,
+        parameters = json.loads(payload)
+        path = '/internal/image-studio/execute-api' if '_api' in parameters else '/internal/image-studio/execute'
+        request = Request(url.rstrip('/') + path, data=payload,
                           headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
-                                   'X-Image-Owner': channel['owner'], 'X-Image-Job': channel['job_id']})
+                                   'X-Image-Owner': channel['owner'], 'X-Image-Job': channel['job_id'],
+                                   'X-Image-Execution-Deadline': str(int(time.time()) + 1500)})
         try:
             with HTTP.open(request, timeout=1500) as response:
                 data = response.read(24*1024*1024+1)
@@ -107,28 +135,116 @@ def channel_runner(url, token):
             if len(data) > 24*1024*1024:
                 raise ValueError('relay_result_limit')
             result = json.loads(data)
+            if not isinstance(result, dict):
+                raise ValueError('invalid_relay_result')
             images = result.get('data', [])
-            if len(images) != 1 or not images[0].get('b64_json'):
+            if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict) or not images[0].get('b64_json'):
                 # No URL fetching: the configured image provider must return
                 # inline image bytes, keeping content out of persistent URLs.
                 raise ValueError('inline_image_result_required')
             image = base64.b64decode(images[0]['b64_json'], validate=True)
+            if not image.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise ValueError('invalid_relay_png')
             return image, {'provider_channel': provider_channel}
-        except HTTPError:
-            # A provider's HTTP error is never a licence to generate twice.
-            raise RuntimeError('channel_rejected') from None
-        except (OSError, TimeoutError):
+        except HTTPError as exc:
+            try:
+                if exc.code == 422:
+                    data = exc.read(4097)
+                    decision = json.loads(data) if len(data) <= 4096 else None
+                    if (isinstance(decision, dict) and decision.get('protocol') == 'image-studio-output-v1'
+                            and decision.get('owner') == channel['owner']
+                            and decision.get('job_id') == channel['job_id']
+                            and decision.get('error') in ('output_blocked', 'output_check_unavailable')):
+                        raise OutputRejected(decision['error']) from None
+                if exc.code == 429:
+                    data = exc.read(4097)
+                    admission = json.loads(data) if len(data) <= 4096 else None
+                    if (isinstance(admission, dict) and admission.get('protocol') == 'image-studio-admission-v1'
+                            and admission.get('state') == 'not_started'
+                            and admission.get('owner') == channel['owner']
+                            and admission.get('job_id') == channel['job_id']
+                            and admission.get('error') == 'image_channel_busy'):
+                        raise BusyBeforeAccept() from None
+            except (ValueError, OSError, HTTPException):
+                pass
+            finally:
+                exc.close()
+            # A proxy error can arrive while Go is still executing. Reconcile
+            # capacity, but never replay generic provider/audit/proxy errors.
+            raise UncertainExecution() from None
+        except URLError as exc:
+            if isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)):
+                # No TCP connection was established; no request was accepted.
+                # Fail this job without quarantining healthy future capacity.
+                raise RuntimeError('relay_not_accepted') from None
+            raise UncertainExecution() from None
+        except (OSError, TimeoutError, HTTPException, ValueError, TypeError, KeyError):
             raise UncertainExecution() from None
     return execute
+
+
+def channel_capacity(url, token):
+    """A failed refresh pauses new admission; it never cancels running work."""
+    if len(token) < 32 or not url.startswith(('http://', 'https://')):
+        raise ValueError('Configure private relay URL and token')
+    def read():
+        req = Request(url.rstrip('/') + '/internal/image-studio/capacity',
+                      headers={'Authorization': 'Bearer ' + token})
+        with HTTP.open(req, timeout=3) as response:
+            data = response.read(4097)
+        if len(data) > 4096:
+            raise ValueError('invalid_capacity')
+        result = json.loads(data)
+        if (not isinstance(result, dict) or result.get('protocol') != 'image-studio-capacity-v1'
+                or result.get('model') != '2.1' or type(result.get('capacity')) is not int
+                or not 0 <= result['capacity'] <= 64):
+            raise ValueError('invalid_capacity')
+        return result['capacity']
+    return read
+
+
+def channel_reconciler(url, token):
+    """Confirm completion or atomically fence a callback not yet accepted by Go."""
+    if len(token) < 32 or not url.startswith(('http://', 'https://')):
+        raise ValueError('Configure private relay URL and token')
+
+    def reconcile(identity):
+        request = Request(url.rstrip('/') + '/internal/image-studio/reconcile', data=b'{}',
+                          headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
+                                   'X-Image-Owner': identity['owner'], 'X-Image-Job': identity['job_id']})
+        try:
+            with HTTP.open(request, timeout=3) as response:
+                if response.status != 200 or response.headers.get_content_type() != 'application/json':
+                    return False
+                data = response.read(4097)
+            if len(data) > 4096:
+                return False
+            result = json.loads(data)
+            if (not isinstance(result, dict) or result.get('protocol') != 'image-studio-recovery-v1'
+                    or not isinstance(result.get('epoch'), str)
+                    or not re.fullmatch(r'[0-9a-f]{32}', result['epoch'])
+                    or result.get('owner') != identity['owner'] or result.get('job_id') != identity['job_id']):
+                return False
+            # A new gateway epoch is safe only with the documented single active
+            # gateway deployment. The new process fences absent callbacks; GPU
+            # health + worker locks still protect work surviving its predecessor.
+            return result.get('state') in ('settled', 'fenced')
+        except HTTPError as exc:
+            exc.close()
+            return False
+        except (OSError, TimeoutError, HTTPException, ValueError, TypeError):
+            return False
+    return reconcile
 
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, dispatch, token):
+    def __init__(self, address, dispatch, token, *, api_enabled=False):
         if len(token) < 32:
             raise ValueError('IMAGE_STUDIO_DISPATCHER_TOKEN must contain at least 32 characters')
         self.dispatch, self.token, self.epoch = dispatch, token, secrets.token_hex(16)
+        self.api_enabled = api_enabled
         self.slots = threading.BoundedSemaphore(24)
         super().__init__(address, Handler)
 
@@ -172,14 +288,19 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.headers.get('Authorization', '')
             if not hmac.compare_digest(auth, 'Bearer ' + self.server.token):
                 raise Rejected(401, 'dispatcher_auth_required')
+            queue = self.server.dispatch
+            if self.command == 'GET' and self.path == '/healthz':
+                health = queue.health()
+                return self.reply(503 if health['status'] == 'unavailable' else 200, health)
             owner = self.headers.get('X-Image-Owner', '')
             if not re.fullmatch(r'cuberouter-[1-9][0-9]{0,18}', owner):
                 raise Rejected(403, 'verified_owner_required')
-            queue = self.server.dispatch
             if self.command == 'GET':
                 if self.path == '/session':
-                    return self.reply(200, {'owner': owner, 'epoch': self.server.epoch, 'generation_enabled': True,
-                                            'model': '2.1', 'result_ttl': queue.result_ttl, 'storage': 'browser'})
+                    return self.reply(200, {'owner': owner, 'epoch': self.server.epoch,
+                                            'generation_enabled': queue.health()['status'] != 'unavailable',
+                                            'model': '2.1', 'result_ttl': queue.result_ttl, 'storage': 'browser',
+                                            'api_protocol': 'image-api-queue-v1' if self.server.api_enabled else None})
                 if self.path == '/pools':
                     return self.reply(200, queue.metrics())
                 lookup = re.fullmatch(r'/requests/([a-zA-Z0-9_-]{16,80})', self.path)
@@ -202,13 +323,24 @@ class Handler(BaseHTTPRequestHandler):
             if len(body) != length:
                 raise Rejected(400, 'incomplete_body')
             parameters = json.loads(body)
-            if self.path == '/jobs':
+            if self.path in ('/jobs', '/api-jobs'):
                 if self.headers.get('X-Trial-Epoch') != self.server.epoch:
                     raise Rejected(409, 'server_restarted_review_before_resubmit')
                 key = self.headers.get('Idempotency-Key', '')
                 if not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', key):
                     raise Rejected(400, 'idempotency_key_required')
-                job, created = queue.submit(owner, key, validate(parameters))
+                if self.path == '/api-jobs':
+                    if not self.server.api_enabled:
+                        raise Rejected(503, 'api_queue_unavailable')
+                    parameters = validate_api(parameters)
+                else:
+                    parameters = validate(parameters)
+                reserved_id = None
+                if self.path == '/api-jobs':
+                    if not re.fullmatch(r'[0-9a-f]{64}', key):
+                        raise Rejected(400, 'invalid_api_request_key')
+                    reserved_id = key[:32]
+                job, created = queue.submit(owner, key, parameters, reserved_id=reserved_id)
                 return self.reply(202 if created else 200, job)
             match = re.fullmatch(r'/jobs/([0-9a-f]{32})/(ack|cancel)', self.path)
             if not match:
@@ -224,19 +356,27 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     relay_url = os.environ.get('IMAGE_STUDIO_RELAY_URL', '')
+    reconcile = None
+    capacity_reader = None
     if relay_url:
-        capacity = int(os.environ.get('IMAGE_STUDIO_RELAY_CONCURRENCY', '1'))
-        if not 1 <= capacity <= 8:
-            raise SystemExit('Relay concurrency must be between 1 and 8')
+        configured = os.environ.get('IMAGE_STUDIO_RELAY_CONCURRENCY', '1')
+        if configured == 'auto':
+            capacity = 64
+            capacity_reader = channel_capacity(relay_url, os.environ.get('IMAGE_STUDIO_RELAY_TOKEN', ''))
+        else:
+            capacity = int(configured)
+        if not 1 <= capacity <= 64:
+            raise SystemExit('Relay concurrency must be auto or between 1 and 64')
         channels = [{'id': f'channel-slot-{i+1}', 'model': '2.1'} for i in range(capacity)]
         runner = channel_runner(relay_url, os.environ.get('IMAGE_STUDIO_RELAY_TOKEN', ''))
+        reconcile = channel_reconciler(relay_url, os.environ.get('IMAGE_STUDIO_RELAY_TOKEN', ''))
         health = lambda channel: True
     else:
         channels = json.loads(os.environ['IMAGE_STUDIO_CHANNELS'])
         runner, health = run, ready
     if not channels or any(c.get('model') != '2.1' for c in channels):
         raise SystemExit('Configure Qwen Image 2.1 channels')
-    dispatch = Dispatcher(channels, runner, health)
+    dispatch = Dispatcher(channels, runner, health, reconcile=reconcile, capacity_reader=capacity_reader)
     server = Server((os.environ.get('IMAGE_STUDIO_BIND', '127.0.0.1'),
                      int(os.environ.get('IMAGE_STUDIO_PORT', '18195'))),
                     dispatch, os.environ.get('IMAGE_STUDIO_DISPATCHER_TOKEN', ''))

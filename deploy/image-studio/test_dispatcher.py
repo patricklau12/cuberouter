@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 """HTTP trust boundary and single-GPU mixed create/edit regression tests."""
 import base64
 import json
@@ -25,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
 from dispatcher import Server, validate, run
-from queue_core import Dispatcher, Rejected
+from queue_core import Dispatcher, Rejected, UncertainExecution
 from test_queue import PNG, wait_for
 
 
@@ -78,6 +77,24 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/jobs', payload(), key='short')[0], 400)
         self.assertEqual(self.request('/session')[1]['owner'], 'cuberouter-1')
         self.assertEqual(self.dispatch.metrics()['retained_jobs'], 0)
+
+    def test_health_and_session_reflect_lost_capacity_then_recovery(self):
+        def uncertain(c, p): raise UncertainExecution()
+        self.dispatch.runner = uncertain
+        self.assertEqual(self.request('/healthz', token='wrong')[0], 401)
+        self.assertEqual(self.request('/healthz', owner='')[1]['status'], 'ready')
+        code, job = self.request('/jobs', payload())
+        self.assertEqual(code, 202)
+        wait_for(lambda: self.dispatch.status('cuberouter-1', job['id'])['state'] == 'failed')
+        code, health = self.request('/healthz', owner='')
+        self.assertEqual(code, 503)
+        self.assertEqual(health['quarantined_slots'], 1)
+        self.assertFalse(self.request('/session')[1]['generation_enabled'])
+        self.assertEqual(self.request('/jobs', payload(), owner='cuberouter-2')[0], 503)
+        self.dispatch.reconcile = lambda identity: True
+        wait_for(lambda: self.dispatch.health()['status'] == 'ready')
+        self.assertEqual(self.request('/healthz')[0], 200)
+        self.assertTrue(self.request('/session')[1]['generation_enabled'])
 
     def test_four_users_share_one_fifo_and_ack_erases_content(self):
         jobs = []

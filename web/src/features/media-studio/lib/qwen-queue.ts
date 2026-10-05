@@ -177,6 +177,16 @@ export async function collectQwenJob(
     onStatus(status)
     if (status.state === 'completed') break
     if (status.state !== 'queued' && status.state !== 'running') {
+      if (status.error === 'output_blocked') {
+        throw new Error(
+          'We cannot generate this image. Your request did not pass review. Please try a different idea.'
+        )
+      }
+      if (status.error === 'output_check_unavailable') {
+        throw new Error(
+          'Image review is temporarily unavailable. No image was released.'
+        )
+      }
       throw new Error(
         'Image job ended. Your draft is kept; review it before trying again.'
       )

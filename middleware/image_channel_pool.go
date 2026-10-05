@@ -75,7 +75,7 @@ var imageHealthHTTP = &http.Client{Timeout: 2 * time.Second, CheckRedirect: func
 
 func imagePoolIDs() ([]int, error) {
 	raw := strings.TrimSpace(os.Getenv("IMAGE_STUDIO_CHANNEL_IDS"))
-	if raw == "" {
+	if raw == "" || raw == "auto" {
 		return nil, nil
 	}
 	ids, seen := []int{}, map[int]bool{}
@@ -91,6 +91,27 @@ func imagePoolIDs() ([]int, error) {
 		return nil, errors.New("image channel pool too large")
 	}
 	return ids, nil
+}
+
+var ErrImageChannelBusy = errors.New("image channel busy before inference")
+
+// Count current configured channels only; never expose their keys or URLs.
+func ImageChannelPoolCapacity() (int, error) {
+	ids, err := imagePoolIDs()
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(os.Getenv("IMAGE_STUDIO_CHANNEL_IDS")) != "auto" && len(ids) == 0 {
+		return 0, errors.New("image pool not configured")
+	}
+	channels, err := model.GetImageChannelCandidates(os.Getenv("IMAGE_STUDIO_CHANNEL_MODEL"), nil, ids)
+	if err != nil {
+		return 0, err
+	}
+	if len(channels) > 64 {
+		return 0, errors.New("image channel pool too large")
+	}
+	return len(channels), nil
 }
 
 func imageChannelReady(ctx context.Context, ch *model.Channel) bool {
@@ -132,11 +153,12 @@ func reserveConfiguredImageChannel(c *gin.Context, requestedModel, group string,
 	if err != nil {
 		return nil, "", nil, true, err
 	}
-	if len(ids) == 0 {
+	dynamic := strings.TrimSpace(os.Getenv("IMAGE_STUDIO_CHANNEL_IDS")) == "auto"
+	if len(ids) == 0 && !dynamic {
 		return nil, "", nil, false, nil
 	}
 	if specific > 0 {
-		found := false
+		found := dynamic
 		for _, id := range ids {
 			if id == specific {
 				found = true
@@ -151,25 +173,50 @@ func reserveConfiguredImageChannel(c *gin.Context, requestedModel, group string,
 	if group == "auto" {
 		groups = service.GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup))
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	wait := 30 * time.Second
+	studio := common.GetContextKeyBool(c, constant.ContextKeyImageStudio)
+	if studio {
+		wait = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), wait)
 	defer cancel()
 	cooldown := map[int]time.Time{}
 	for {
 		channels, selectedGroups := map[int]*model.Channel{}, map[int]string{}
 		eligible := []int{}
-		for _, id := range ids {
-			if time.Now().Before(cooldown[id]) {
-				continue
+		candidates, lookupErr := model.GetImageChannelCandidates(requestedModel, groups, ids)
+		if lookupErr != nil {
+			return nil, "", nil, true, lookupErr
+		}
+		if len(candidates) > 64 {
+			return nil, "", nil, true, errors.New("image channel pool too large")
+		}
+		if len(candidates) == 0 && studio {
+			if dynamic {
+				// A zero-capacity refresh can lag behind a last-channel removal.
+				// Preserve queued work until channels return (or queue TTL expires).
+				capacity, err := ImageChannelPoolCapacity()
+				if err == nil && capacity == 0 {
+					return nil, "", nil, true, ErrImageChannelBusy
+				}
 			}
-			ch, lookupErr := model.GetChannelById(id, true)
-			if lookupErr != nil || ch.Status != common.ChannelStatusEnabled {
-				continue
-			}
+			return nil, "", nil, true, errors.New("no eligible image channels")
+		}
+		for _, ch := range candidates {
 			if ok, _ := model.ChannelSatisfiesFilters(ch, requestedModel, service.GetChannelConstraints(c).Filters); !ok {
 				continue
 			}
+			id := ch.Id
+			if time.Now().Before(cooldown[id]) {
+				continue
+			}
+			// Abilities and channel fields are read fresh on every admission.
 			for _, g := range groups {
-				if model.IsChannelEnabledForGroupModel(g, requestedModel, id) {
+				allowed, err := model.GetImageChannelCandidates(requestedModel, []string{g}, []int{id})
+				if err != nil {
+					return nil, "", nil, true, err
+				}
+				if len(allowed) > 0 {
 					channels[id], selectedGroups[id] = ch, g
 					eligible = append(eligible, id)
 					break
@@ -199,6 +246,10 @@ func reserveConfiguredImageChannel(c *gin.Context, requestedModel, group string,
 					break
 				}
 			}
+		}
+		if studio {
+			// No generation body has been forwarded. Queue may safely wait.
+			return nil, "", nil, true, ErrImageChannelBusy
 		}
 		select {
 		case <-ctx.Done():

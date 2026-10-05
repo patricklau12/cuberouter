@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 import copy
 import json
 import os
@@ -56,6 +55,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn('ports', dispatcher)
         self.assertNotIn('database', overlay['services'])
         self.assertTrue(overlay['networks']['image-studio-private']['internal'])
+        self.assertEqual(dispatcher['healthcheck']['test'],
+                         ['CMD', 'python', '-B', '/app/healthcheck.py'])
+        self.assertNotIn(self.tokens['dispatcher_token'],
+                         json.dumps(dispatcher['healthcheck']))
 
     def test_default_network_and_released_image(self):
         del self.base['services']['gateway']['networks']
@@ -66,11 +69,21 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn('build', dispatcher)
         self.assertEqual(dispatcher['environment']['IMAGE_STUDIO_RELAY_CONCURRENCY'], '1')
 
+    def test_auto_overlay_follows_channels_without_id_list(self):
+        self.assertIsNone(channel_ids('auto'))
+        overlay = make_overlay(self.base, 'gateway', channel_ids('auto'), self.tokens, 3000)
+        self.assertEqual(overlay['services']['gateway']['environment']['IMAGE_STUDIO_CHANNEL_IDS'], 'auto')
+        self.assertEqual(overlay['services']['image-studio-dispatcher']['environment']['IMAGE_STUDIO_RELAY_CONCURRENCY'], 'auto')
+
     def test_rejects_ambiguous_or_unsupported_capacity(self):
-        for ids in ('', '0', '1,1', '1,', '1,2,3,4,5,6,7,8,9', '1;2'):
+        for ids in ('', '0', '1,1', '1,', ','.join(str(i) for i in range(1, 66)), '1;2'):
             with self.subTest(ids=ids), self.assertRaises(ValueError):
                 channel_ids(ids)
         self.assertEqual(channel_ids(' 2, 3 '), ['2', '3'])
+        ids = [str(i) for i in range(1, 33)]
+        self.assertEqual(channel_ids(','.join(ids)), ids)
+        overlay = make_overlay(self.base, 'gateway', ids, self.tokens, 3000)
+        self.assertEqual(overlay['services']['image-studio-dispatcher']['environment']['IMAGE_STUDIO_RELAY_CONCURRENCY'], '32')
         for change in ({'deploy': {'replicas': 2}}, {'scale': 2}, {'network_mode': 'host'}):
             base = copy.deepcopy(self.base)
             base['services']['gateway'].update(change)

@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 """One RAM-only dispatcher; each configured channel has exactly one execution slot."""
 import hashlib, json, secrets, threading, time
 from collections import deque
@@ -25,15 +24,26 @@ class Rejected(Exception):
 
 class BusyBeforeAccept(Exception): pass
 class UncertainExecution(Exception): pass
+class OutputRejected(Exception):
+    def __init__(self, code):
+        if code not in ('output_blocked', 'output_check_unavailable'):
+            raise ValueError('Unknown output decision')
+        self.code = code
 
 class Dispatcher:
     def __init__(self, channels, runner, ready=lambda channel: True, *, queue_limit=10,
                  byte_limit=256*1024*1024, result_ttl=600, queue_ttl=900, metadata_ttl=600,
-                 max_jobs=1000, clock=time.monotonic):
+                 max_jobs=1000, clock=time.monotonic, reconcile=None,
+                 recovery_interval=1, recovery_max_interval=30, capacity_reader=None, capacity_interval=5):
         if len({c['id'] for c in channels}) != len(channels): raise ValueError('Duplicate channel IDs')
         if len({c.get('url',c['id']) for c in channels}) != len(channels): raise ValueError('Duplicate worker endpoints')
-        self.channels = [dict(c, state='idle', job=None) for c in channels]
+        self.channels = [dict(c, state='idle', job=None, slot_index=i) for i,c in enumerate(channels)]
+        self.capacity_reader, self.capacity_interval = capacity_reader, capacity_interval
+        self.capacity = 0 if capacity_reader else len(channels)
         self.runner, self.ready, self.clock = runner, ready, clock
+        self.reconcile = reconcile
+        self.recovery_interval, self.recovery_max_interval = recovery_interval, recovery_max_interval
+        if not 0 < recovery_interval <= recovery_max_interval: raise ValueError('Invalid recovery intervals')
         self.queue_limit, self.byte_limit = queue_limit, byte_limit
         self.result_ttl, self.queue_ttl, self.metadata_ttl = result_ttl, queue_ttl, metadata_ttl
         self.max_jobs = max_jobs
@@ -43,7 +53,27 @@ class Dispatcher:
         self.stopping = False
         self.threads = []
 
+    def _enabled(self,c): return c['slot_index'] < self.capacity
+
+    def _refresh_capacity(self):
+        try:
+            value=self.capacity_reader()
+            if type(value) is not int or not 0 <= value <= len(self.channels): raise ValueError('Invalid capacity')
+        except Exception: value=0
+        with self.cv:
+            self.capacity=value
+            self.cv.notify_all()
+
+    def _capacity_loop(self):
+        while True:
+            self._refresh_capacity()
+            with self.cv:
+                if self.cv.wait_for(lambda:self.stopping,timeout=self.capacity_interval): return
+
     def start(self):
+        if self.capacity_reader:
+            self._refresh_capacity()
+            t=threading.Thread(target=self._capacity_loop,daemon=True);t.start();self.threads.append(t)
         for c in self.channels:
             t=threading.Thread(target=self._work,args=(c,),daemon=True); t.start(); self.threads.append(t)
         t=threading.Thread(target=self._cleaner,daemon=True); t.start(); self.threads.append(t)
@@ -57,7 +87,7 @@ class Dispatcher:
     def _drop(self,j,state):
         j.update(state=state,payload=None,result=None,finished=self.clock())
 
-    def submit(self,owner,key,parameters):
+    def submit(self,owner,key,parameters,*,reserved_id=None):
         payload=json.dumps(parameters,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
         fingerprint=hashlib.sha256(payload).hexdigest()
         model=parameters['model']
@@ -69,11 +99,16 @@ class Dispatcher:
                 if j['fingerprint']!=fingerprint: raise Rejected(409,'idempotency_conflict')
                 return self._view(j), False
             if model not in self.queues: raise Rejected(400,'unsupported_model')
+            if not any(self._enabled(c) and c['model']==model and c['state']!='quarantined' for c in self.channels):
+                raise Rejected(503,'execution_capacity_unavailable')
+            if any(c.get('recovery',{}).get('owner')==owner for c in self.channels):
+                raise Rejected(429,'execution_recovery_pending')
             if any(j['owner']==owner and j['state'] in ('queued','running') for j in self.jobs.values()):
                 raise Rejected(429,'one_unfinished_job_per_session')
             if len(self.queues[model])>=self.queue_limit: raise Rejected(429,'queue_full')
             if self._used()+len(payload)>self.byte_limit or len(self.jobs)>=self.max_jobs: raise Rejected(503,'memory_capacity')
-            ident=secrets.token_hex(16)
+            ident=reserved_id or secrets.token_hex(16)
+            if ident in self.jobs: raise Rejected(409,'idempotency_conflict')
             j=dict(id=ident,owner=owner,key=key,fingerprint=fingerprint,model=model,state='queued',
                    created=self.clock(),payload=payload,result=None,channel=None)
             self.jobs[ident]=j; self.keys[(owner,key)]=ident; self.queues[model].append(ident)
@@ -144,9 +179,40 @@ class Dispatcher:
     def metrics(self):
         with self.cv:
             self.cleanup()
-            return {'content_bytes':self._used(),'retained_jobs':len(self.jobs),
+            return {'content_bytes':self._used(),'retained_jobs':len(self.jobs), 'capacity':self.health(),
                     'models':{m:{'queued':len(q),'running':sum(j['state']=='running' and j['model']==m for j in self.jobs.values()),
-                                 'channels':[{'id':c['id'],'state':c['state']} for c in self.channels if c['model']==m]} for m,q in self.queues.items()}}
+                                 'channels':[{'id':c['id'],'state':c['state']} for c in self.channels if c['model']==m and (self._enabled(c) or c['state'] in ('running','quarantined'))]} for m,q in self.queues.items()}}
+
+    def health(self):
+        # Capacity readiness, not a claim that every upstream GPU is healthy.
+        # Busy slots are healthy; an uncertain callback must first reconcile.
+        with self.cv:
+            configured=[c for c in self.channels if self._enabled(c)]
+            total=len(configured)
+            healthy=sum(c['state'] in ('idle','running') for c in configured)
+            quarantined=sum(c['state']=='quarantined' for c in configured)
+            return {'status':'unavailable' if self.stopping or not healthy else 'ready' if healthy==total else 'degraded',
+                    'healthy_slots':healthy,'total_slots':total,'quarantined_slots':quarantined}
+
+    def _recover(self,c):
+        with self.cv:
+            if self.stopping: return
+            recovery=c.get('recovery')
+            if not self.reconcile or not recovery or self.clock()<c['next_probe']:
+                self.cv.wait(0.2); return
+            identity=dict(recovery)
+        # Never hold the queue lock across network I/O. Keep only identity here;
+        # failed-job content/metadata can expire independently of recovery.
+        try: released=self.reconcile(identity) is True
+        except Exception: released=False
+        with self.cv:
+            if released:
+                c.update(state='idle',job=None)
+                for key in ('recovery','next_probe','probe_delay'): c.pop(key,None)
+            else:
+                c['next_probe']=self.clock()+c['probe_delay']
+                c['probe_delay']=min(self.recovery_max_interval,c['probe_delay']*2)
+            self.cv.notify_all()
 
     def _cleaner(self):
         while True:
@@ -159,8 +225,13 @@ class Dispatcher:
             with self.cv:
                 self.cleanup()
                 if self.stopping: return
-                if c['state']=='quarantined' or not self.queues[c['model']]:
+                quarantined=c['state']=='quarantined'
+                if not quarantined and not self._enabled(c):
+                    self.cv.wait(0.5); continue
+                if not quarantined and c['state']!='unavailable' and not self.queues[c['model']]:
                     self.cv.wait(0.2); continue
+            if quarantined:
+                self._recover(c); continue
             try: is_ready=self.ready(c)
             except Exception: is_ready=False
             if not is_ready:
@@ -169,7 +240,7 @@ class Dispatcher:
             with self.cv:
                 self.cleanup()
                 if self.stopping: return
-                if not self.queues[c['model']]: c['state']='idle'; continue
+                if not self._enabled(c) or not self.queues[c['model']]: c['state']='idle'; continue
                 j=self.jobs[self.queues[c['model']].popleft()]
                 j.update(state='running',started=self.clock(),channel=c['id'])
                 c.update(state='running',job=j['id'])
@@ -194,8 +265,11 @@ class Dispatcher:
             except Exception as exc:
                 with self.cv:
                     self._drop(j,'failed')
-                    j['error']='execution_uncertain_no_retry' if isinstance(exc,UncertainExecution) else 'worker_failed'
-                    if isinstance(exc,UncertainExecution): c['state']='quarantined'
+                    j['error']=(exc.code if isinstance(exc,OutputRejected) else
+                                'execution_uncertain_no_retry' if isinstance(exc,UncertainExecution) else 'worker_failed')
+                    if isinstance(exc,UncertainExecution):
+                        c.update(state='quarantined',recovery={'owner':j['owner'],'job_id':j['id']},
+                                 next_probe=self.clock(),probe_delay=self.recovery_interval)
             finally:
                 payload=result=meta=None
                 with self.cv:

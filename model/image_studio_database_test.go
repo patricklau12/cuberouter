@@ -20,6 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 package model
 
 import (
+	"context"
+	"github.com/QuantumNous/new-api/constant"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,17 +72,17 @@ func TestImageStudioDatabaseMatrix(t *testing.T) {
 			DB = db
 			t.Cleanup(func() { DB = old })
 			for _, upgrade := range []bool{false, true} {
-				require.NoError(t, db.Migrator().DropTable(&ImageStudioAudit{}))
+				require.NoError(t, db.Migrator().DropTable(&ImageStudioAudit{}, &ImageAPIPolicy{}, &ImageModerationPolicy{}, &ImageModerationLease{}))
 				if upgrade {
 					// Persisted fields match release v1.0.0; preserve existing account/channel data.
 					require.NoError(t, db.AutoMigrate(&User{}, &Channel{}, &Ability{}, &Option{}))
 					require.NoError(t, db.Create(&User{Id: 987001, Username: "studio-upgrade", Status: 1, Group: "image-studio"}).Error)
 					require.NoError(t, db.Create(&Channel{Id: 987001, Name: "existing-image-channel", Type: 1, Status: 1, Key: "test-only"}).Error)
 				}
-				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}))
+				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}, &ImageAPIPolicy{}, &ImageModerationPolicy{}, &ImageModerationLease{}))
 				require.NoError(t, CreateImageStudioAudit(&ImageStudioAudit{JobID: "matrix-job", UserID: 987001, Username: "studio-upgrade", ModelPrompt: "保留原圖 🌸", State: "queued"}))
-				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}))
-				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}))
+				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}, &ImageAPIPolicy{}, &ImageModerationPolicy{}, &ImageModerationLease{}))
+				require.NoError(t, db.AutoMigrate(&ImageStudioAudit{}, &ImageAPIPolicy{}, &ImageModerationPolicy{}, &ImageModerationLease{}))
 				require.NoError(t, CreateImageStudioAudit(&ImageStudioAudit{JobID: "matrix-job", UserID: 987001, ModelPrompt: "must not overwrite"}))
 				require.True(t, db.Migrator().HasIndex(&ImageStudioAudit{}, "idx_image_studio_audits_job_id"))
 				rows, err := FindImageStudioAudits("matrix-job", "", 987001)
@@ -92,6 +94,42 @@ func TestImageStudioDatabaseMatrix(t *testing.T) {
 				rows, err = FindImageStudioAudits("", "test-hash", 987001)
 				require.NoError(t, err)
 				require.Len(t, rows, 1)
+
+				first, err := ClaimImageStudioAudit(&ImageStudioAudit{JobID: "durable-api", UserID: 987001, Source: "api", RequestHash: "immutable"})
+				require.NoError(t, err)
+				require.True(t, first)
+				second, err := ClaimImageStudioAudit(&ImageStudioAudit{JobID: "durable-api", UserID: 987001, RequestHash: "replacement"})
+				require.NoError(t, err)
+				require.False(t, second)
+				require.NoError(t, SaveImageAPIPolicy(ImageAPIPolicy{GroupName: "image-studio", Moderation: "required", UpdatedBy: 987001}))
+				require.NoError(t, db.AutoMigrate(&ImageAPIPolicy{}, &ImageModerationPolicy{}, &ImageModerationLease{}))
+				policy, err := ImageAPIModeration("image-studio")
+				require.NoError(t, err)
+				require.Equal(t, "required", policy)
+				require.NoError(t, SaveImageAPIPolicy(ImageAPIPolicy{GroupName: "image-studio", Moderation: "external", UpdatedBy: 987001}))
+				ctx := context.Background()
+				leased, err := TryImageModerationLease(ctx, "https://example.invalid/v1/moderate", "owner-1", time.Minute)
+				require.NoError(t, err)
+				require.True(t, leased)
+				leased, err = TryImageModerationLease(ctx, "https://example.invalid/v1/moderate", "owner-2", time.Minute)
+				require.NoError(t, err)
+				require.False(t, leased)
+				ReleaseImageModerationLease("https://example.invalid/v1/moderate", "owner-1", 0)
+				leased, err = TryImageModerationLease(ctx, "https://example.invalid/v1/moderate", "owner-2", time.Minute)
+				require.NoError(t, err)
+				require.True(t, leased)
+				require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}))
+				ch := Channel{Id: 987002, Type: constant.ChannelTypeImageModeration, Name: "private-review", Status: 1, Key: "fixture"}
+				require.NoError(t, db.Create(&ch).Error)
+				require.NoError(t, ch.AddAbilities(db))
+				var abilities int64
+				require.NoError(t, db.Model(&Ability{}).Where("channel_id = ?", 987002).Count(&abilities).Error)
+				require.Zero(t, abilities)
+				require.NoError(t, db.Delete(&ch).Error)
+				required, channels, err := ImageModerationChannels(ctx)
+				require.NoError(t, err)
+				require.True(t, required)
+				require.Empty(t, channels)
 				require.NoError(t, PurgeExpiredImageStudioAudits(time.Now().Add(ImageStudioAuditRetention+time.Minute).Unix()))
 				var count int64
 				require.NoError(t, db.Model(&ImageStudioAudit{}).Count(&count).Error)

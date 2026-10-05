@@ -79,6 +79,19 @@ func ImageStudio(c *gin.Context) {
 		fail(http.StatusNotFound, "unknown_route")
 		return
 	}
+	// API jobs have their own token/policy checks. A browser session must not
+	// fetch their unchecked output through the older Studio result route.
+	if len(parts) >= 2 && parts[0] == "jobs" {
+		rows, lookupErr := model.FindImageStudioAudits(parts[1], "", owner)
+		if lookupErr != nil {
+			fail(503, "audit_unavailable")
+			return
+		}
+		if len(rows) > 0 && rows[0].Source == "api" {
+			fail(404, "unknown_job")
+			return
+		}
+	}
 	var body []byte
 	if c.Request.Method == http.MethodPost {
 		kind, _, parseErr := mime.ParseMediaType(c.ContentType())
@@ -137,6 +150,8 @@ func ImageStudio(c *gin.Context) {
 	if path == "/session" && resp.StatusCode == 200 {
 		var session map[string]any
 		if common.Unmarshal(data, &session) == nil {
+			required, _, policyErr := model.ImageModerationChannels(c.Request.Context())
+			session["output_moderation_enabled"] = required || policyErr != nil || (os.Getenv("IMAGE_STUDIO_MODERATION_ENABLED") != "" && os.Getenv("IMAGE_STUDIO_MODERATION_ENABLED") != "false")
 			session["audit_retention_days"] = 0
 			if model.ImageStudioAuditEnabled() {
 				session["audit_retention_days"] = 30

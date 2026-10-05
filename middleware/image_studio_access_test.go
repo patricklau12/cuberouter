@@ -42,9 +42,9 @@ func TestImageStudioUsesCurrentMembershipAndLeavesTokenGroupsAvailable(t *testin
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	oldDB, oldRedis := model.DB, common.RedisEnabled
+	oldDB, oldRedis, oldClient := model.DB, common.RedisEnabled, common.RDB
 	model.DB, common.RedisEnabled = db, false
-	t.Cleanup(func() { model.DB, common.RedisEnabled = oldDB, oldRedis; sqlDB.Close() })
+	t.Cleanup(func() { model.DB, common.RedisEnabled, common.RDB = oldDB, oldRedis, oldClient; sqlDB.Close() })
 	require.NoError(t, db.AutoMigrate(&model.User{}))
 	for _, u := range []model.User{
 		{Id: 701, Username: "studio-user", Group: "image-studio", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
@@ -80,7 +80,9 @@ func TestImageStudioUsesCurrentMembershipAndLeavesTokenGroupsAvailable(t *testin
 			require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 		}
 	}
-	// Revocation is effective without replacing the logged-in session.
+	// Revocation must still consult the database when Redis is configured but
+	// unavailable, without trusting the stale session group above.
+	common.RedisEnabled, common.RDB = true, nil
 	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 701).Update("group", "default").Error)
 	require.Equal(t, 403, request(701, "GET", "/session").Code)
 	// An enrollment does not replace normal token group choices, and the

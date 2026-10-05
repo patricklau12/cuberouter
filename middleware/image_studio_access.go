@@ -29,7 +29,7 @@ import (
 )
 
 // ImageStudioGroupAuth must follow UserAuth. Read current account membership:
-// session group snapshots and request headers cannot grant Studio access.
+// session group snapshots, Redis caches and request headers cannot grant access.
 func ImageStudioGroupAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
@@ -38,7 +38,7 @@ func ImageStudioGroupAuth() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "login_required"})
 			return
 		}
-		user, err := model.GetUserCache(id)
+		user, err := model.GetUserById(id, false)
 		if err != nil || user == nil {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "image_studio_access_unavailable"})
 			return

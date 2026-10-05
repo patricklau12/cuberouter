@@ -27,6 +27,7 @@ import {
   releaseQwenResult,
 } from '../lib/qwen-queue'
 import { initialDraft } from '../lib/workflow'
+
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@/lib/api', () => ({ api: http }))
 afterEach(() => {
@@ -73,3 +74,24 @@ test('reconnecting retrieves a finished job by request key and acknowledges only
   await releaseQwenResult(8703, result.id)
   expect(await pendingJob(8703)).toBeUndefined()
 })
+
+test.each([
+  ['output_blocked', 'Your request did not pass review'],
+  ['output_check_unavailable', 'No image was released'],
+])(
+  'a %s result withholds image fetching and distinguishes policy from outage',
+  async (code, message) => {
+    http.get.mockResolvedValue({
+      data: { id: 'b'.repeat(32), state: 'failed', error: code },
+    })
+    await expect(
+      collectQwenJob(
+        { key: 'k'.repeat(32), epoch: 'e', draft: initialDraft, created: 100 },
+        new AbortController().signal,
+        vi.fn()
+      )
+    ).rejects.toThrow(message)
+    expect(http.get).toHaveBeenCalledTimes(1)
+    expect(http.post).not.toHaveBeenCalled()
+  }
+)

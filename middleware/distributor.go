@@ -80,6 +80,11 @@ func Distribute() func(c *gin.Context) {
 			selected, selectedGroup, release, handled, poolErr := reserveConfiguredImageChannel(c, modelRequest.Model, usingGroup, channel.Id)
 			if handled {
 				if poolErr != nil {
+					if common.GetContextKeyBool(c, constant.ContextKeyImageStudio) && errors.Is(poolErr, ErrImageChannelBusy) {
+						c.Set("image_studio_pool_busy", true)
+						c.Abort()
+						return
+					}
 					abortWithOpenAiMessage(c, 503, "image_channel_pool_unavailable")
 					return
 				}
@@ -141,6 +146,11 @@ func Distribute() func(c *gin.Context) {
 				selected, selectedGroup, release, handled, poolErr := reserveConfiguredImageChannel(c, modelRequest.Model, usingGroup, 0)
 				if handled {
 					if poolErr != nil {
+						if common.GetContextKeyBool(c, constant.ContextKeyImageStudio) && errors.Is(poolErr, ErrImageChannelBusy) {
+							c.Set("image_studio_pool_busy", true)
+							c.Abort()
+							return
+						}
 						abortWithOpenAiMessage(c, 503, "image_channel_pool_unavailable")
 						return
 					}
@@ -641,6 +651,9 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 				)
 			}
 		}
+	}
+	if channel.Type == constant.ChannelTypeImageModeration {
+		return types.NewError(errors.New("moderation channels are private"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)

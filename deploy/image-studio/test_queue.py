@@ -15,7 +15,6 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # For commercial licensing, please contact support@quantumnous.com
-
 import json, threading, time, unittest
 from queue_core import Dispatcher, Rejected, UncertainExecution, BusyBeforeAccept
 

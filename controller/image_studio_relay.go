@@ -21,7 +21,6 @@ package controller
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
@@ -33,7 +32,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -45,41 +43,20 @@ import (
 )
 
 type studioParameters struct {
-	Model      string   `json:"model"`
-	Mode       string   `json:"mode"`
-	Prompt     string   `json:"prompt"`
-	UserPrompt string   `json:"user_prompt,omitempty"`
-	Width      int      `json:"width"`
-	Height     int      `json:"height"`
-	Steps      int      `json:"steps"`
-	Seed       int64    `json:"seed"`
-	CFG        float64  `json:"cfg"`
-	Images     []string `json:"images"`
+	API        *studioAPIIdentity `json:"_api,omitempty"`
+	Model      string             `json:"model"`
+	Mode       string             `json:"mode"`
+	Prompt     string             `json:"prompt"`
+	UserPrompt string             `json:"user_prompt,omitempty"`
+	Width      int                `json:"width"`
+	Height     int                `json:"height"`
+	Steps      int                `json:"steps"`
+	Seed       int64              `json:"seed"`
+	CFG        float64            `json:"cfg"`
+	Images     []string           `json:"images"`
 }
 
 var studioJobID = regexp.MustCompile(`^[0-9a-f]{32}$`)
-var studioExecutions = struct {
-	sync.Mutex
-	seen map[string]time.Time
-}{seen: make(map[string]time.Time)}
-
-// claimStudioExecution retains only identifiers, never inputs or outputs. The
-// dispatcher never retries callbacks; this also rejects duplicate delivery.
-func claimStudioExecution(job string) bool {
-	studioExecutions.Lock()
-	defer studioExecutions.Unlock()
-	now := time.Now()
-	for key, expiry := range studioExecutions.seen {
-		if now.After(expiry) {
-			delete(studioExecutions.seen, key)
-		}
-	}
-	if _, exists := studioExecutions.seen[job]; exists || len(studioExecutions.seen) >= 4096 {
-		return false
-	}
-	studioExecutions.seen[job] = now.Add(time.Hour)
-	return true
-}
 
 func studioRelayBody(p studioParameters, modelName string) ([]byte, string, string, error) {
 	if p.Model != "2.1" || (p.Mode != "create" && p.Mode != "edit") ||
@@ -170,6 +147,17 @@ func PrepareImageStudioRelay(c *gin.Context) {
 		fail(400, "invalid_request")
 		return
 	}
+	deadlineUnix, err := strconv.ParseInt(c.GetHeader("X-Image-Execution-Deadline"), 10, 64)
+	executionDeadline := time.Unix(deadlineUnix, 0)
+	now := time.Now()
+	if err != nil || executionDeadline.After(now.Add(26*time.Minute)) {
+		fail(400, "invalid_execution_deadline")
+		return
+	}
+	if !now.Before(executionDeadline) {
+		fail(408, "execution_deadline_expired")
+		return
+	}
 	data, err := io.ReadAll(io.LimitReader(c.Request.Body, imageStudioBodyLimit+1))
 	if err != nil || len(data) > imageStudioBodyLimit {
 		fail(413, "body_limit")
@@ -180,36 +168,82 @@ func PrepareImageStudioRelay(c *gin.Context) {
 		fail(400, "invalid_parameters")
 		return
 	}
+	apiExecution := c.Request.URL.Path == "/internal/image-studio/execute-api"
+	if apiExecution != (p.API != nil) {
+		fail(400, "invalid_execution_source")
+		return
+	}
+	if apiExecution {
+		defer func() {
+			if c.Writer.Status() < 400 || c.GetBool("image_studio_pool_busy") {
+				return
+			}
+			rows, err := model.FindImageStudioAudits(job, "", id)
+			if err == nil && len(rows) == 1 && rows[0].OutputHash == "" && (rows[0].State == "queued" || rows[0].State == "running") {
+				_ = model.UpdateImageStudioAudit(job, id, map[string]any{"state": "failed"})
+			}
+		}()
+	}
 	body, contentType, path, err := studioRelayBody(p, modelName)
 	if err != nil {
 		fail(400, "invalid_parameters")
 		return
 	}
-	user, err := model.GetUserCache(id)
-	if err != nil || user == nil || user.Status != common.UserStatusEnabled {
+	currentUser, err := model.GetUserById(id, false)
+	if err != nil || currentUser == nil || currentUser.Status != common.UserStatusEnabled {
 		fail(403, "account_unavailable")
 		return
 	}
+	user := currentUser.ToBaseUser()
 	// Membership may have been revoked while this job waited in the queue.
-	if !model.ImageStudioGroupAllowed(user.Group) {
+	if !apiExecution && !model.ImageStudioGroupAllowed(user.Group) {
 		fail(403, "image_studio_access_denied")
 		return
 	}
-	if !claimStudioExecution(job) {
-		fail(409, "execution_already_attempted")
+	user.WriteContext(c)
+	if apiExecution {
+		if err := prepareStudioAPIIdentity(c, currentUser, p.API); err != nil {
+			fail(403, "image_api_access_denied")
+			return
+		}
+	}
+	if err := studioExecutions.claim(job, owner, executionDeadline); err != nil {
+		if err == errStudioExecutionCapacity {
+			fail(503, "execution_registry_full")
+		} else if err == errStudioExecutionDeadline {
+			fail(408, "execution_deadline_expired")
+		} else {
+			fail(409, "execution_already_attempted")
+		}
 		return
 	}
+	// This outer defer runs after Distribute's physical-channel release. It
+	// remains active even when the dispatcher has lost the response connection.
+	defer func() {
+		// A busy reply permits another attempt of this unstarted job. This
+		// handler must never settle that later attempt after writing its reply.
+		if !c.GetBool("image_studio_pool_busy") {
+			studioExecutions.settle(job, owner)
+		}
+	}()
 	c.Set(common.RequestIdKey, job)
 	if err := studioAudit(job, id, p, "running"); err != nil {
 		fail(503, "audit_unavailable")
 		return
 	}
-	user.WriteContext(c)
-	if err := middleware.SetupContextForToken(c, &model.Token{UserId: id, Name: "image-studio", Group: user.Group, UnlimitedQuota: true}); err != nil {
-		fail(403, "account_billing_unavailable")
-		return
+	if apiExecution {
+		if model.UpdateImageStudioAudit(job, id, map[string]any{"token_name": c.GetString("token_name"), "moderation_policy": c.GetString("image_api_moderation")}) != nil {
+			fail(503, "audit_unavailable")
+			return
+		}
 	}
-	common.SetContextKey(c, constant.ContextKeyUsingGroup, user.Group)
+	if !apiExecution {
+		if err := middleware.SetupContextForToken(c, &model.Token{UserId: id, Name: "image-studio", Group: user.Group, UnlimitedQuota: true}); err != nil {
+			fail(403, "account_billing_unavailable")
+			return
+		}
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, user.Group)
+	}
 	common.SetContextKey(c, constant.ContextKeyImageStudio, true)
 	// Rewrite only after private authentication. Downstream uses the exact same
 	// channel selection, model mapping, adaptor and account billing as /v1.
@@ -230,6 +264,17 @@ func PrepareImageStudioRelay(c *gin.Context) {
 		defer c.Request.MultipartForm.RemoveAll()
 	}
 	c.Next()
+	if c.GetBool("image_studio_pool_busy") {
+		studioExecutions.deferUnstarted(job, owner)
+		if model.ImageStudioAuditEnabled() {
+			_ = model.UpdateImageStudioAudit(job, id, map[string]any{"state": "queued"})
+		}
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+			"protocol": "image-studio-admission-v1", "state": "not_started",
+			"owner": owner, "job_id": job, "error": "image_channel_busy",
+		})
+		return
+	}
 	if model.ImageStudioAuditEnabled() && c.Writer.Status() >= 400 {
 		_ = model.UpdateImageStudioAudit(job, id, map[string]any{"state": "failed"})
 	}
@@ -254,30 +299,7 @@ func ImageStudioChannelRelay(c *gin.Context) {
 	Relay(c, types.RelayFormatOpenAIImage)
 	c.Writer = original
 	original.Header().Del("Content-Length")
-	if model.ImageStudioAuditEnabled() {
-		values := map[string]any{"state": "failed"}
-		if buffer.status == 200 && !buffer.overflow {
-			var result struct {
-				Data []struct {
-					Image string `json:"b64_json"`
-				} `json:"data"`
-			}
-			if common.Unmarshal(buffer.body.Bytes(), &result) == nil && len(result.Data) == 1 {
-				if image, err := base64.StdEncoding.Strict().DecodeString(result.Data[0].Image); err == nil && bytes.HasPrefix(image, []byte("\x89PNG\r\n\x1a\n")) {
-					values["state"], values["output_hash"] = "completed", fmt.Sprintf("%x", sha256.Sum256(image))
-				}
-			}
-		}
-		if model.UpdateImageStudioAudit(job, owner, values) != nil {
-			c.AbortWithStatusJSON(503, gin.H{"error": "audit_unavailable"})
-			return
-		}
-	}
-	if buffer.overflow {
-		c.AbortWithStatusJSON(502, gin.H{"error": "image_result_limit"})
-		return
-	}
-	c.Data(buffer.status, "application/json", buffer.body.Bytes())
+	deliverStudioOutput(c, buffer)
 }
 
 type studioRelayWriter struct {

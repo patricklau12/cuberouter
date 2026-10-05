@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { withBasePath } from '@/lib/base-path'
+
 import type catalog from '../official-examples.json'
 import { referenceAsset } from '../workflow-api'
 import type { StudioAsset } from '../workflow-types'
@@ -30,7 +32,7 @@ export async function exampleReferences(
     for (const input of example.inputs) {
       if (bitmaps.has(input.asset)) continue
       const response = await fetch(
-        `/image-studio/official-qwen21/${input.asset}`,
+        withBasePath(`/image-studio/official-qwen21/${input.asset}`),
         { credentials: 'omit' }
       )
       if (!response.ok) throw new Error('Official example could not be loaded.')

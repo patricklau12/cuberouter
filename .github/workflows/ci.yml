@@ -122,6 +122,10 @@ jobs:
           go-version-file: go.mod
       - name: Queue, admission, recovery and deployment tests
         run: python3 -m unittest discover -s deploy/image-studio -p 'test_*.py'
+      - name: Output review service and bounded pool tests
+        run: |
+          python3 -m pip install -r deploy/image-moderation/requirements-api.txt pytest httpx
+          python3 -m pytest deploy/image-moderation -q
       - name: Build CPU-only dispatcher
         run: docker build -t cuberouter-image-studio:ci deploy/image-studio
       - name: SQLite, MySQL and PostgreSQL audit migration contracts
@@ -133,3 +137,7 @@ jobs:
           mkdir -p web/dist
           touch web/dist/index.html
           go test ./model -run TestImageStudioDatabaseMatrix -count=1 -v
+      - name: Local API, billing, queue and moderation smoke
+        run: |
+          go build -o /tmp/cuberouter-studio-smoke .
+          python3 deploy/image-studio/smoke_api.py /tmp/cuberouter-studio-smoke

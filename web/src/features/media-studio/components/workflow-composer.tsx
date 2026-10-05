@@ -29,10 +29,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { QUALITY_OPTIONS } from '../constants'
 import { draftSchema } from '../lib/workflow'
 import type { Quality } from '../types'
-import type { WorkflowDraft } from '../workflow-types'
+import type { WorkflowConfig, WorkflowDraft } from '../workflow-types'
 
 export function WorkflowComposer(props: {
   draft: WorkflowDraft
+  config?: WorkflowConfig
   textToImageModels: string[]
   imageToImageModels: string[]
   busy: boolean
@@ -45,9 +46,6 @@ export function WorkflowComposer(props: {
 }) {
   const { t } = useTranslation()
   const editing = props.draft.mode === 'edit'
-  const uploads = props.draft.queued
-    ? props.config.qwen_queue_enabled && props.config.qwen_access
-    : props.config.upload_enabled
   const referenceLimit = props.draft.queued ? 10 : 3
   const models = editing ? props.imageToImageModels : props.textToImageModels
   const form = useForm<WorkflowDraft>({
@@ -59,7 +57,7 @@ export function WorkflowComposer(props: {
   const valid =
     draftSchema.safeParse(props.draft).success &&
     models.includes(props.draft.model) &&
-    (!props.draft.queued || !!props.config.qwen_access)
+    (!props.draft.queued || !!props.config?.qwen_access)
   return (
     <form
       className='space-y-4'
@@ -158,8 +156,7 @@ export function WorkflowComposer(props: {
               accept='image/png,image/jpeg,image/webp'
               multiple
               disabled={
-                props.busy ||
-                props.draft.references.length >= referenceLimit
+                props.busy || props.draft.references.length >= referenceLimit
               }
               onChange={(event) => {
                 props.onUpload([...(event.target.files ?? [])])
