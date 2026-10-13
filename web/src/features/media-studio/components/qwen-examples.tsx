@@ -83,6 +83,7 @@ export function QwenExamples(props: {
                     user_prompt: undefined,
                     size: `${example.width}x${example.height}`,
                     steps: 40,
+                    quality: 'standard',
                     cfg: 1,
                     seed: 42,
                     references,

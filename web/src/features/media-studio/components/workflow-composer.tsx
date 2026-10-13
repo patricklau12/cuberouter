@@ -26,7 +26,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 
-import { QUALITY_OPTIONS } from '../constants'
+import { QUALITY_OPTIONS, qwenQualitySteps } from '../constants'
 import { draftSchema } from '../lib/workflow'
 import type { Quality } from '../types'
 import type { WorkflowConfig, WorkflowDraft } from '../workflow-types'
@@ -226,7 +226,40 @@ export function WorkflowComposer(props: {
       <p className='text-muted-foreground text-xs'>
         {t('Supported sizes and image counts depend on the selected provider.')}
       </p>
-      {props.draft.queued ? (
+      <div className='space-y-1'>
+        <span className='block text-sm'>{t('Quality')}</span>
+        <RadioGroup
+          aria-label={t('Quality')}
+          value={props.draft.quality}
+          onValueChange={(value) => {
+            const quality = value as Quality
+            update({
+              quality,
+              ...(props.draft.queued
+                ? { steps: qwenQualitySteps(quality) }
+                : {}),
+            })
+          }}
+          disabled={props.busy}
+          className='grid-cols-3'
+        >
+          {QUALITY_OPTIONS.map((option) => (
+            <div key={option.id} className='flex items-center gap-2'>
+              <RadioGroupItem
+                value={option.id}
+                id={`workflow-quality-${option.id}`}
+              />
+              <label
+                htmlFor={`workflow-quality-${option.id}`}
+                className='cursor-pointer text-xs'
+              >
+                {t(option.labelKey)}
+              </label>
+            </div>
+          ))}
+        </RadioGroup>
+      </div>
+      {props.draft.queued && (
         <details>
           <summary>{t('Advanced settings')}</summary>
           <div className='mt-2 grid grid-cols-3 gap-2'>
@@ -236,7 +269,9 @@ export function WorkflowComposer(props: {
                 type='number'
                 min={1}
                 max={60}
-                value={props.draft.steps ?? 40}
+                value={
+                  props.draft.steps ?? qwenQualitySteps(props.draft.quality)
+                }
                 disabled={props.busy}
                 onChange={(event) =>
                   update({
@@ -286,32 +321,6 @@ export function WorkflowComposer(props: {
             </label>
           </div>
         </details>
-      ) : (
-        <div className='space-y-1'>
-          <span className='block text-sm'>{t('Quality')}</span>
-          <RadioGroup
-            aria-label={t('Quality')}
-            value={props.draft.quality}
-            onValueChange={(value) => update({ quality: value as Quality })}
-            disabled={props.busy}
-            className='grid-cols-3'
-          >
-            {QUALITY_OPTIONS.map((option) => (
-              <div key={option.id} className='flex items-center gap-2'>
-                <RadioGroupItem
-                  value={option.id}
-                  id={`workflow-quality-${option.id}`}
-                />
-                <label
-                  htmlFor={`workflow-quality-${option.id}`}
-                  className='cursor-pointer text-xs'
-                >
-                  {t(option.labelKey)}
-                </label>
-              </div>
-            ))}
-          </RadioGroup>
-        </div>
       )}
       <Button
         type='submit'

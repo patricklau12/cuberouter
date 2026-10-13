@@ -21,6 +21,7 @@ import { isAxiosError } from 'axios'
 
 import { api } from '@/lib/api'
 
+import { qwenQualitySteps } from '../constants'
 import { blobDataURL } from '../workflow-api'
 import type { WorkflowDraft, WorkflowJob } from '../workflow-types'
 
@@ -95,7 +96,7 @@ export function qwenParameters(draft: WorkflowDraft) {
     user_prompt: draft.user_prompt ?? draft.prompt,
     width,
     height,
-    steps: draft.steps ?? 40,
+    steps: draft.steps ?? qwenQualitySteps(draft.quality),
     cfg: draft.cfg ?? 1,
     seed: draft.seed ?? 42,
     images: draft.mode === 'edit' ? images : [],

@@ -74,12 +74,20 @@ afterEach(() => {
 
 test('loading an official sample returns an editable draft without a generation request', async () => {
   const apply = vi.fn()
-  render(<QwenExamples draft={draft} disabled={false} onApply={apply} />)
+  render(
+    <QwenExamples
+      draft={{ ...draft, quality: 'high' }}
+      disabled={false}
+      onApply={apply}
+    />
+  )
   fireEvent.click(screen.getAllByRole('button', { name: 'Load example' })[0])
   await waitFor(() => expect(apply).toHaveBeenCalledTimes(1))
   const result = apply.mock.calls[0][0] as WorkflowDraft
   expect(result.references).toHaveLength(6)
   expect(result.mode).toBe('edit')
+  expect(result.quality).toBe('standard')
+  expect(result.steps).toBe(40)
   expect(result.prompt.length).toBeGreaterThan(0)
   for (const [url, options] of vi.mocked(fetch).mock.calls) {
     expect(String(url)).toMatch(/^\/image-studio\/official-qwen21\//)
