@@ -7,7 +7,7 @@ index a601049..2ccd4be 100644
  import torch
  from diffusers import QwenImage21Pipeline
 +from edit_quality import reference_resolution
-
+ 
  MODEL = '2.1'
  REVISION = 'b3179ad355be050328e483a9dfdd9e60cd62adfa'
 @@ -11,7 +12,9 @@ GPU = int(os.environ['QWEN_PHYSICAL_GPU'])
@@ -20,7 +20,7 @@ index a601049..2ccd4be 100644
 +         'single_reference_vae_tiling': False}
  PIPE = None
  Image.MAX_IMAGE_PIXELS = 16_000_000
-
+ 
 @@ -91,9 +94,11 @@ class Handler(BaseHTTPRequestHandler):
                          generator=torch.Generator(device='cuda:0').manual_seed(p['seed']),
                          callback_on_step_end=progress)
