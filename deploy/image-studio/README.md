@@ -74,3 +74,14 @@ CubeStack retains type 64. Do not import channel type numbers from Nutsflush.
 No destination deployment, production channel configuration or real-GPU capacity
 acceptance is performed by these checks. Deploy and validate the matching gateway,
 web build and dispatcher in staging as described in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### Full-context image quality (2026-10-13)
+
+The optional GPU worker patch also includes Nutsflush MR !16: full VAE context
+for creation and all one-to-ten-reference edits, higher count-specific reference
+budgets, and release of completed conditioning caches before decoding. Original
+PNG bytes, output dimensions, model weights and dtype are preserved. An OOM does
+not trigger an automatic retry at lower quality. See [EDIT_QUALITY.md](EDIT_QUALITY.md)
+for controlled GPU evidence, limits, required health flags and separate rollout.
+Merging or deploying the CubeRouter gateway/dispatcher does not update a mounted
+GPU worker. This change does not alter the CubeRouter UI or navigation.
