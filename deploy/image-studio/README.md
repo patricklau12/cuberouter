@@ -7,6 +7,8 @@ shared generation/API queue, dynamic GPU channels, Gemma review and audit UI.
 
 Start with [DEPLOYMENT.md](DEPLOYMENT.md); API integration and independent
 per-group moderation policy are in [API-QUEUE.md](API-QUEUE.md).
+Edit seed handling and the optional worker quality patch are documented in
+[EDIT_QUALITY.md](EDIT_QUALITY.md).
 
 ```mermaid
 flowchart LR
@@ -52,7 +54,8 @@ private reviewers and expiry. CI supplies all three engines.
 Based on `suanova/cuberouter` main `3a460f57`, incorporating the HKBN image
 implementation through `68adec43` (including the queued API/audit work).
 The destination keeps its React 19 UI, organization billing, BASE_PATH support
-and existing reference-upload behavior. Channel type 64 is specific to this fork.
+and existing reference-upload behavior. Image moderation uses channel type 65;
+CubeStack retains type 64. Do not import channel type numbers from Nutsflush.
 
 - All 1,184 frontend tests passed, along with TypeScript and the production build.
 - Image-related Go controller, middleware, model, router and billing tests passed;

@@ -26,11 +26,20 @@ from urllib.request import Request
 
 from dispatcher import HTTP, channel_runner
 from qwen_channel_bridge import Bridge, to_worker
-from queue_core import Dispatcher
+from queue_core import Dispatcher, Rejected
 from test_queue import wait_for, PNG
 
 
 class ChannelTests(unittest.TestCase):
+    def test_bridge_rejects_non_object_extra_fields(self):
+        for extra in ([], 'bad', None):
+            with self.subTest(extra=extra), self.assertRaises(Rejected) as rejected:
+                to_worker('/v1/images/generations', 'application/json', json.dumps({
+                    'model': 'qwen-image-2.1', 'prompt': 'Tea', 'n': 1,
+                    'size': '512x512', 'response_format': 'b64_json',
+                    'extra_fields': extra}).encode(), 'qwen-image-2.1')
+            self.assertEqual(rejected.exception.status, 400)
+
     def test_health_requires_key_and_returns_only_bounded_worker_status(self):
         class Worker(BaseHTTPRequestHandler):
             calls = 0

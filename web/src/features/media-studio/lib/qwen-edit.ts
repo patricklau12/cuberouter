@@ -30,6 +30,24 @@ export interface Stroke {
   points: [number, number][]
 }
 
+// Select once for a new edit. Recovery and explicit advanced choices retain it.
+export function newEditSeed(previous?: number): number {
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0]
+  return seed === previous ? (seed + 1) % 4294967296 : seed
+}
+
+export function referenceDimensions(width: number, height: number): string {
+  const scale = Math.min(
+    1,
+    1664 / width,
+    1664 / height,
+    Math.sqrt(2097152 / (width * height))
+  )
+  return [width, height]
+    .map((side) => Math.max(256, Math.floor((side * scale) / 32) * 32))
+    .join('x')
+}
+
 export function drawStrokes(
   ctx: CanvasRenderingContext2D,
   strokes: Stroke[],
@@ -61,6 +79,7 @@ export function editDraft(
     references: [asset],
     parent_id: parent,
     annotation: undefined,
+    seed: draft.queued ? newEditSeed(draft.seed) : draft.seed,
   }
 }
 

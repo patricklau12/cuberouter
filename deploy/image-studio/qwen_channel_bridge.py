@@ -65,6 +65,8 @@ def to_worker(path, content_type, body, model_name):
     if len(size) != 2:
         raise Rejected(400, 'invalid_size')
     extra = fields.get('extra_fields', {})
+    if not isinstance(extra, dict):
+        raise Rejected(400, 'invalid_extra_fields')
     return validate({'model': '2.1', 'mode': 'edit' if path.endswith('/edits') else 'create',
                      'prompt': fields['prompt'], 'width': int(size[0]), 'height': int(size[1]),
                      'steps': extra.get('steps', 40), 'seed': extra.get('seed', 42),

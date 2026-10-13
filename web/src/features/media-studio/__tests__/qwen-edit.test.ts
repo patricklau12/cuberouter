@@ -19,7 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { expect, test, vi } from 'vitest'
 
-import { annotatedDraft, drawStrokes, editDraft } from '../lib/qwen-edit'
+import {
+  annotatedDraft,
+  drawStrokes,
+  editDraft,
+  newEditSeed,
+  referenceDimensions,
+} from '../lib/qwen-edit'
 import { qwenParameters } from '../lib/qwen-queue'
 import { draftSchema, initialDraft } from '../lib/workflow'
 
@@ -33,6 +39,30 @@ const marked = {
   url: 'data:image/png;base64,bWFya2Vk',
   mime: 'image/png',
 }
+
+test('a new edit advances a repeated maximum seed without exceeding the worker range', () => {
+  const draw = vi
+    .spyOn(crypto, 'getRandomValues')
+    .mockImplementation((array) => {
+      ;(array as Uint32Array)[0] = 4294967295
+      return array
+    })
+  try {
+    expect(newEditSeed(4294967295)).toBe(0)
+  } finally {
+    draw.mockRestore()
+  }
+})
+
+test.each([
+  [1280, 1280, '1280x1280'],
+  [1536, 1024, '1536x1024'],
+  [3000, 2000, '1664x1088'],
+])(
+  'a %i by %i uploaded reference defaults to supported dimensions %s',
+  (width, height, expected) =>
+    expect(referenceDimensions(width, height)).toBe(expected)
+)
 test('freehand strokes keep their endpoints open without filling', () => {
   const ctx = {
     beginPath: vi.fn(),
@@ -81,7 +111,7 @@ test('annotated edits submit marked bytes and the one instruction while preservi
   )
   expect(result.annotation?.original).toEqual(original)
 })
-test('continuing an edit retains model, dimensions and parameters', () => {
+test('continuing an edit refreshes the seed and retains dimensions and other parameters', () => {
   const draft = {
     ...initialDraft,
     model: 'qwen-image-2.1',
@@ -91,10 +121,11 @@ test('continuing an edit retains model, dimensions and parameters', () => {
     seed: 0,
     steps: 8,
   }
-  expect(editDraft(draft, original, 'parent')).toMatchObject({
+  const next = editDraft(draft, original, 'parent')
+  expect(next.seed).not.toBe(draft.seed)
+  expect(next).toMatchObject({
     size: '1120x736',
     cfg: 0,
-    seed: 0,
     steps: 8,
     parent_id: 'parent',
     references: [original],

@@ -251,6 +251,11 @@ export function QwenEditor(props: {
             <p>
               {t('Image size')}: {props.draft.size}
             </p>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Image editing regenerates the whole image. Fine details may change; keep the original for comparison.'
+              )}
+            </p>
             {!!error && <p role='alert'>{t(error)}</p>}
             <Button
               disabled={busy || !ready || !instruction.trim()}

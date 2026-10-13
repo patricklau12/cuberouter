@@ -61,7 +61,8 @@ const (
 	ChannelTypeNewAPI          = 61
 	ChannelTypeTaskPlugin      = 62
 	ChannelTypeImageEdit       = 63
-	ChannelTypeImageModeration = 64
+	ChannelTypeCubeStack       = 64
+	ChannelTypeImageModeration = 65
 	ChannelTypeDummy           // this one is only for count, do not add any channel after this
 
 )
@@ -131,7 +132,8 @@ var ChannelBaseURLs = []string{
 	"",                                          //61
 	"",                                          //62
 	"",                                          //63
-	"",                                          // 64: private image moderation
+	"",                                          //64
+	"",                                          //65: private image moderation
 }
 
 func GetChannelBaseURL(channelType int) string {
@@ -203,6 +205,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeNewAPI:          "New API",
 	ChannelTypeTaskPlugin:      "Task Plugin",
 	ChannelTypeImageEdit:       "Image Edit (Base64)",
+	ChannelTypeCubeStack:       "CubeStack",
 }
 
 func GetChannelTypeName(channelType int) string {

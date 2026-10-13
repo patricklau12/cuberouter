@@ -34,6 +34,8 @@ export interface WorkflowConfig {
 export interface StudioModelCatalog {
   textToImage: string[]
   imageToImage: string[]
+  textToVideo: string[]
+  imageToVideo: string[]
 }
 export interface WorkflowDraft {
   queued?: boolean

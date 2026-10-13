@@ -57,7 +57,7 @@ Studio uses the signed-in user's group. LLM routing/billing remain unchanged.
 
 Add `ShieldGemma 2 (Image moderation)` channels with the full HTTPS `/v1/moderate`
 URL, dedicated service key and optional public CA certificate. The UI fills the
-private model/group. This fork uses type **64**, because 58 is already Advanced
+private model/group. This fork uses type **65**, because 64 is CubeStack and 58 is Advanced
 Custom. Do not copy HKBN channel type numbers or databases wholesale.
 See [reviewer protocol](../image-moderation/README.md). No hardcoded reviewer IP
 is required. Database leases serialize use of each reviewer across Go replicas.

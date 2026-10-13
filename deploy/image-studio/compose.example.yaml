@@ -1,6 +1,6 @@
 services:
   image-studio-dispatcher:
-    build: .
+    image: ${IMAGE_STUDIO_IMAGE:?Set the dispatcher image with the same immutable commit tag as the gateway}
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

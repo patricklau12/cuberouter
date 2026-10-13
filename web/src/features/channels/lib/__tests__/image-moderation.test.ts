@@ -30,7 +30,7 @@ test('moderation CA survives creating and reopening a channel without replacing 
     '-----BEGIN CERTIFICATE-----\npublic-ca\n-----END CERTIFICATE-----'
   const payload = transformFormDataToCreatePayload({
     ...CHANNEL_FORM_DEFAULT_VALUES,
-    type: 64,
+    type: 65,
     name: 'Gemma GPU',
     base_url: 'https://review.example/v1/moderate',
     key: 'service-key',
@@ -57,7 +57,7 @@ test('a malformed existing settings field does not crash the channel editor', ()
   try {
     expect(
       transformChannelToFormDefaults({
-        type: 64,
+        type: 65,
         settings: '{broken',
         channel_info: {},
       } as Parameters<typeof transformChannelToFormDefaults>[0])
