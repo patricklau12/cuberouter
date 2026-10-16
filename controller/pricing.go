@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -80,6 +81,21 @@ func GetPricing(c *gin.Context) {
 			}
 		}
 	}
+	// 当前用户的模型折扣随价目表一起下发，前端据此展示折后价。折扣只能进这个
+	// 独立响应字段：pricing 切片是共享缓存对象，改写元素会串到其他用户。
+	userModelDiscounts := map[string]float64{}
+	if exists {
+		if id, ok := userId.(int); ok {
+			// 读不出折扣就按无折扣处理，价目表不该因为折扣读取失败而 500；但失败
+			// 必须留痕——前端据此展示折后价与徽标，静默降级会让折扣「看起来没配」。
+			loaded, err := model.GetUserModelDiscounts(id, false)
+			if err != nil {
+				common.SysError(fmt.Sprintf("用户模型折扣读取失败，价目表按原价下发: userId=%d, err=%v", id, err))
+			} else if loaded != nil {
+				userModelDiscounts = loaded
+			}
+		}
+	}
 
 	usableGroup = service.GetAccountUsableGroups(group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
@@ -96,12 +112,13 @@ func GetPricing(c *gin.Context) {
 			"pricings":        pricing,
 			"off_peak_window": ratio_setting.GetOffPeakWindow(),
 		},
-		"vendors":            model.GetVendors(),
-		"group_ratio":        groupRatio,
-		"usable_group":       usableGroup,
-		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetAccountAutoGroup(group),
-		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
+		"vendors":              model.GetVendors(),
+		"group_ratio":          groupRatio,
+		"user_model_discounts": userModelDiscounts,
+		"usable_group":         usableGroup,
+		"supported_endpoint":   model.GetSupportedEndpointMap(),
+		"auto_groups":          service.GetAccountAutoGroup(group),
+		"pricing_version":      "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }
 

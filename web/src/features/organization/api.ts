@@ -49,6 +49,7 @@ import type {
   OrganizationTaskRow,
   OrganizationTokenBatchCreateResult,
   OrganizationTokenRow,
+  UserModelDiscounts,
 } from './types'
 
 interface ApiEnvelope {
@@ -369,6 +370,64 @@ export async function removeOrganizationMember(
       return res.data
     }
   )
+}
+
+/**
+ * A member's per-model billing discounts, read through the organization.
+ *
+ * The record is stored on the user rather than on the membership, so this is
+ * the same table the platform administration edits from the users page; the
+ * organization's own endpoint is what limits the reach to the caller's active
+ * members and records the visit in the organization audit trail.
+ */
+export async function getOrganizationMemberModelDiscounts(
+  organizationId: number,
+  userId: number,
+  surface: OrganizationSurface
+): Promise<UserModelDiscounts> {
+  const res = await api.get(
+    `${organizationResourceBase(surface, organizationId)}/members/${userId}/model-discounts`
+  )
+  const payload = res.data as
+    | OrganizationApiResponse<{ discounts?: UserModelDiscounts }>
+    | undefined
+  // A refusal (member no longer active, no longer readable) is answered as
+  // HTTP 200 with `success: false`. Falling through to the empty record would
+  // present it as "this member has no discounts", and saving that shape would
+  // clear the record the caller never read.
+  if (payload?.success === false) {
+    throw new Error(payload.message || 'Request failed')
+  }
+  return payload?.data?.discounts ?? {}
+}
+
+/**
+ * Replaces a member's per-model billing discounts; an empty record clears every
+ * discount of that member.
+ *
+ * A discount follows the member rather than the membership, so it applies to
+ * all of their calls — including those paid from their personal wallet, and
+ * including calls made with an organization key, which are attributed to the
+ * member responsible for it.
+ *
+ * A business-level refusal — a malformed model name, an out-of-range factor —
+ * is answered HTTP 200 with `success: false` and reported by the API client's
+ * interceptor, which is the same mechanism the platform administration's write
+ * uses; throwing here is what keeps the dialog from treating it as saved.
+ */
+export async function updateOrganizationMemberModelDiscounts(
+  organizationId: number,
+  userId: number,
+  discounts: UserModelDiscounts,
+  surface: OrganizationSurface
+): Promise<void> {
+  const res = await api.put(
+    `${organizationResourceBase(surface, organizationId)}/members/${userId}/model-discounts`,
+    { discounts }
+  )
+  if (res.data?.success === false) {
+    throw new Error(res.data.message || 'Request failed')
+  }
 }
 
 /**
