@@ -240,6 +240,7 @@
     "No Organizations Found": "No Organizations Found",
     "No tasks in this range": "No tasks in this range",
     "No usage in this period.": "No usage in this period.",
+    "None of the selected models are available to this member": "None of the selected models are available to this member",
     "One entry per line: a domain, *.domain, or one exact address.": "One entry per line: a domain, *.domain, or one exact address.",
     "One IP per line; leave empty for no limit": "One IP per line; leave empty for no limit",
     "Only active owners and administrators can take over API keys.": "Only active owners and administrators can take over API keys.",
@@ -6133,6 +6134,10 @@
     "Save discounts": "Save discounts",
     "Member Model Discounts": "Member Model Discounts",
     "Applies to all calls made by this member (including personal wallet); organization keys are attributed to their responsible member.": "Applies to all calls made by this member (including personal wallet); organization keys are attributed to their responsible member.",
-    "User Model Discount": "User Model Discount"
+    "User Model Discount": "User Model Discount",
+    "Member Model Access": "Member Model Access",
+    "All models are available by default; select models to restrict this member. Clear the selection to remove the restriction.": "All models are available by default; select models to restrict this member. Clear the selection to remove the restriction.",
+    "Model Settings": "Model Settings",
+    "Member Model Settings": "Member Model Settings"
   }
 }
