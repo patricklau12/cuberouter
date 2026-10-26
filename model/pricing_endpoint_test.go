@@ -456,6 +456,47 @@ func TestPricingModelTagDeclaresImageGenerationEndpoint(t *testing.T) {
 	}, byModel["both-modes-model"])
 }
 
+func TestPricingImagePricesIncludesResolutionRows(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+
+	insertPricingEndpointChannel(t, 503, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 503, "img-resolution")
+
+	previousOptionMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateImagePriceByJSONString("{}"))
+		common.OptionMap = previousOptionMap
+	})
+
+	require.NoError(t, UpdateOption("ImagePrice", `{
+		"img-resolution": {
+			"default_resolution": "1024x1024",
+			"rows": [
+				{"resolution": "1024x1024", "price": 0.006},
+				{"resolution": "1536x1024", "price": 0.01}
+			]
+		}
+	}`))
+	InvalidatePricingCache()
+
+	var found *Pricing
+	pricings := GetPricing()
+	for i := range pricings {
+		pricing := pricings[i]
+		if pricing.ModelName == "img-resolution" {
+			found = &pricing
+			break
+		}
+	}
+	require.NotNil(t, found, "img-resolution should appear in pricing")
+	require.NotNil(t, found.ImagePrices)
+	assert.Equal(t, "1024x1024", found.ImagePrices.DefaultResolution)
+	require.Len(t, found.ImagePrices.Rows, 2)
+	assert.Equal(t, "1024x1024", found.ImagePrices.Rows[0].Resolution)
+	assert.Equal(t, 0.006, found.ImagePrices.Rows[0].Price)
+}
+
 // TestPricingEndpointTypesPerGroupFollowAbilities 覆盖同名模型跨分组挂不同渠道：
 // 价目表按模型名合并全部分组的能力，但判断「这个分组里能不能用」必须看本组能力，
 // 否则一组能聊天、另一组只能生成视频的同名模型会被一并判死。模型级元数据
