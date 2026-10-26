@@ -122,7 +122,15 @@ describe('organization logs section', () => {
   test('does not render a group column or the group value', async () => {
     renderSection()
 
-    expect(await screen.findByText('request-1')).toBeInTheDocument()
+    // Wait for the current DOM, not a node `findByText` happened to catch
+    // during a transient render: the table can replace its rows once the URL
+    // state settles, and asserting on the detached node fails the test.
+    await waitFor(
+      () => {
+        expect(screen.getByText('request-1')).toBeInTheDocument()
+      },
+      { timeout: 5_000 }
+    )
     expect(
       screen.getByRole('columnheader', { name: 'Type' })
     ).toBeInTheDocument()
@@ -135,10 +143,13 @@ describe('organization logs section', () => {
   test('does not send type or group filters to the log endpoints', async () => {
     renderSection()
 
-    await waitFor(() => {
-      expect(listLogsMock).toHaveBeenCalled()
-      expect(logStatsMock).toHaveBeenCalled()
-    })
+    await waitFor(
+      () => {
+        expect(listLogsMock).toHaveBeenCalled()
+        expect(logStatsMock).toHaveBeenCalled()
+      },
+      { timeout: 5_000 }
+    )
 
     const listParams = listLogsMock.mock.calls[0]?.[2]
     expect(listParams).not.toHaveProperty('type')
