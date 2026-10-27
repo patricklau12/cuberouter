@@ -64,6 +64,9 @@ func main() {
 	}
 
 	common.SysLog("CubeRouter " + common.Version + " started")
+	// Watch the ConfigMap-backed channel bootstrap. The first apply runs in the
+	// background so an unreachable upstream cannot delay startup or readiness.
+	controller.StartChannelConfigSync()
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
