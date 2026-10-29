@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/security_setting"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/http/httpguts"
 	"gorm.io/gorm"
 )
 
@@ -478,7 +479,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 	if channel.Type == constant.ChannelTypeStudioReview {
-		if channel.ChannelInfo.IsMultiKey || len(channel.Key) < 32 {
+		if channel.ChannelInfo.IsMultiKey || len(channel.Key) < 32 || !httpguts.ValidHeaderFieldValue(channel.Key) {
 			return fmt.Errorf("image review channels require one service key of at least 32 characters")
 		}
 		if _, err := service.StudioPrivateClient(channel.GetBaseURL(), channel.Other, 45*time.Second); err != nil {
@@ -664,13 +665,16 @@ func AddChannel(c *gin.Context) {
 	if addChannelRequest.Mode == "multi_to_single" && addChannelRequest.Channel != nil {
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
 	}
-	// 使用统一的校验函数
-	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
+	// Review batch keys are validated individually after splitting the lines.
+	isReviewerBatch := addChannelRequest.Mode == "batch" && addChannelRequest.Channel != nil && addChannelRequest.Channel.Type == constant.ChannelTypeStudioReview
+	if !isReviewerBatch {
+		if err := validateChannel(addChannelRequest.Channel, true); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	}
 
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
@@ -748,6 +752,10 @@ func AddChannel(c *gin.Context) {
 			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
 		}
 		channels = append(channels, *localChannel)
+	}
+	if isReviewerBatch && len(channels) == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "image review batch requires at least one service key"})
+		return
 	}
 	err = model.BatchInsertChannels(channels)
 	if err != nil {

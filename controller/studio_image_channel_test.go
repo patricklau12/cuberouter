@@ -53,6 +53,24 @@ func TestStudioReviewerValidationRejectsEmptyStoredServiceKey(t *testing.T) {
 	require.ErrorContains(t, err, "one service key")
 }
 
+func TestStudioReviewerValidationRejectsInvalidHeaderBytes(t *testing.T) {
+	base := "http://127.0.0.1:19001/moderate"
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{"trailing newline", strings.Repeat("s", 32) + "\n"},
+		{"embedded carriage return", strings.Repeat("s", 16) + "\r" + strings.Repeat("s", 16)},
+		{"embedded null", strings.Repeat("s", 16) + "\x00" + strings.Repeat("s", 16)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Key: tc.key, BaseURL: &base}
+			require.Error(t, validateChannel(channel, true), "creation must reject an unusable Authorization header")
+			require.Error(t, validateChannel(channel, false), "editing must reject an unusable Authorization header")
+		})
+	}
+}
+
 func TestStudioReviewerSaveRejectsFinalMultiKeyState(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	base := "http://127.0.0.1:19001/moderate"
@@ -111,6 +129,7 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 	}{
 		{"name only preserves valid connection", map[string]any{"name": "renamed"}, true},
 		{"short key without type", map[string]any{"key": "short"}, false},
+		{"newline key without type", map[string]any{"key": strings.Repeat("s", 32) + "\n"}, false},
 		{"invalid CA without type", map[string]any{"other": "invalid certificate"}, false},
 		{"valid key without base URL", map[string]any{"key": strings.Repeat("n", 32)}, true},
 	} {
@@ -147,17 +166,19 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 
 func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		lastKeyLength int
-		wantCount     int64
+		name     string
+		keys     string
+		wantKeys []string
 	}{
-		{"later short key rejects the entire batch", 31, 0},
-		{"two minimum-length keys are saved independently", 32, 2},
+		{"later short key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 31), nil},
+		{"two minimum-length keys are saved independently", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32), []string{strings.Repeat("v", 32), strings.Repeat("s", 32)}},
+		{"later invalid header key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32) + "\r", nil},
+		{"empty batch is rejected", "\n", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupModelListControllerTestDB(t)
 			base := "http://127.0.0.1:19001/moderate"
-			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: strings.Repeat("v", 32) + "\n" + strings.Repeat("s", tc.lastKeyLength), BaseURL: &base}
+			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: tc.keys, BaseURL: &base}
 			payload, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: channel})
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
@@ -169,10 +190,15 @@ func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
 				Success bool `json:"success"`
 			}
 			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &result))
-			assert.Equal(t, tc.wantCount > 0, result.Success)
+			assert.Equal(t, len(tc.wantKeys) > 0, result.Success)
 			var count int64
 			require.NoError(t, db.Model(&model.Channel{}).Count(&count).Error)
-			assert.Equal(t, tc.wantCount, count, "batch validation runs before any reviewer is inserted")
+			assert.Equal(t, int64(len(tc.wantKeys)), count, "batch validation runs before any reviewer is inserted")
+			if len(tc.wantKeys) > 0 {
+				var storedKeys []string
+				require.NoError(t, db.Model(&model.Channel{}).Order("id").Pluck("key", &storedKeys).Error)
+				assert.Equal(t, tc.wantKeys, storedKeys, "each row retains its corresponding input key")
+			}
 		})
 	}
 }

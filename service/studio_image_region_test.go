@@ -79,20 +79,31 @@ func TestStudioImageRegionReplacesTransparentSelectedPixels(t *testing.T) {
 }
 
 func TestStudioImageRegionBlendsPartialMaskCoverage(t *testing.T) {
-	base := image.NewNRGBA(image.Rect(0, 0, 1, 1))
-	base.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
-	candidate := image.NewNRGBA(base.Bounds())
-	candidate.SetNRGBA(0, 0, color.NRGBA{B: 255, A: 255})
-	mask := image.NewNRGBA(base.Bounds())
-	mask.SetNRGBA(0, 0, color.NRGBA{A: 128})
-	encode := func(img image.Image) []byte {
-		var b bytes.Buffer
-		require.NoError(t, png.Encode(&b, img))
-		return b.Bytes()
+	for _, tc := range []struct {
+		name      string
+		candidate color.NRGBA
+		want      color.NRGBA
+	}{
+		{"opaque candidate blends both colors", color.NRGBA{B: 255, A: 255}, color.NRGBA{R: 128, B: 127, A: 255}},
+		{"transparent candidate cannot tint the base", color.NRGBA{B: 255}, color.NRGBA{R: 255, A: 128}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+			base.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+			candidate := image.NewNRGBA(base.Bounds())
+			candidate.SetNRGBA(0, 0, tc.candidate)
+			mask := image.NewNRGBA(base.Bounds())
+			mask.SetNRGBA(0, 0, color.NRGBA{A: 128})
+			encode := func(img image.Image) []byte {
+				var b bytes.Buffer
+				require.NoError(t, png.Encode(&b, img))
+				return b.Bytes()
+			}
+			out, err := CompositeStudioImage(encode(candidate), encode(base), encode(mask))
+			require.NoError(t, err)
+			decoded, err := png.Decode(bytes.NewReader(out))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, color.NRGBAModel.Convert(decoded.At(0, 0)))
+		})
 	}
-	out, err := CompositeStudioImage(encode(candidate), encode(base), encode(mask))
-	require.NoError(t, err)
-	decoded, err := png.Decode(bytes.NewReader(out))
-	require.NoError(t, err)
-	assert.Equal(t, color.NRGBA{R: 128, B: 127, A: 255}, color.NRGBAModel.Convert(decoded.At(0, 0)))
 }
