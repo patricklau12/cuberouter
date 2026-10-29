@@ -59,6 +59,11 @@ type imageEditRequest struct {
 	NumInferenceSteps *int            `json:"num_inference_steps,omitempty"`
 	Seed              *int64          `json:"seed,omitempty"`
 	TrueCfgScale      *float64        `json:"true_cfg_scale,omitempty"`
+	// Mask is the optional PNG data URL whose transparent pixels mark the area to
+	// repaint. It is forwarded verbatim: the provider decodes it the same way it
+	// decodes Image, and dropping it would silently turn a region edit into a
+	// whole-image edit.
+	Mask json.RawMessage `json:"mask,omitempty"`
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
@@ -92,10 +97,15 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if err != nil {
 		return nil, badRequest(err)
 	}
+	mask, err := normalizeMask(request.Mask)
+	if err != nil {
+		return nil, badRequest(err)
+	}
 	return imageEditRequest{
 		Model:             request.Model,
 		Prompt:            request.Prompt,
 		Image:             image,
+		Mask:              mask,
 		Size:              request.Size,
 		N:                 request.N,
 		Quality:           request.Quality,
@@ -214,4 +224,28 @@ func validateImageValue(image string) error {
 		return errors.New("this channel does not fetch remote images: send the reference image as base64 or as a data URL")
 	}
 	return nil
+}
+
+// normalizeMask validates the optional mask and returns its JSON bytes
+// unchanged. The mask is a PNG data URL, or bare base64 for the same bytes, as
+// large as the reference image, so re-encoding it would only copy that buffer.
+// The provider base64-decodes this field unconditionally: an object, a number
+// or a remote URL would reach its decoder and fail there with an error that
+// says nothing about the mask, so reject those shapes here.
+func normalizeMask(raw json.RawMessage) (json.RawMessage, error) {
+	if isEmptyJSON(raw) {
+		return nil, nil
+	}
+	var mask string
+	if err := common.Unmarshal(raw, &mask); err != nil {
+		return nil, errors.New("mask must be a base64 PNG string or a PNG data URL")
+	}
+	if strings.TrimSpace(mask) == "" {
+		return nil, errors.New("mask must not be empty: omit it to edit the whole image")
+	}
+	lower := strings.ToLower(mask)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return nil, errors.New("this channel does not fetch remote masks: send the mask as base64 or as a data URL")
+	}
+	return raw, nil
 }
