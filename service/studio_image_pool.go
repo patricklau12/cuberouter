@@ -112,7 +112,11 @@ func ReadyStudioImageChannels(ctx context.Context, group, modelName string) []*m
 	}
 	wg.Wait()
 	var leases []model.StudioImageLease
-	if model.DB.Find(&leases).Error != nil {
+	resources := make([]string, 0, len(ids))
+	for _, id := range ids {
+		resources = append(resources, "gpu:"+strconv.Itoa(id))
+	}
+	if model.DB.Where("resource IN ?", resources).Find(&leases).Error != nil {
 		return nil
 	}
 	lastUsed := make(map[int]int64)

@@ -70,11 +70,14 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
-	if channel.Type == constant.ChannelTypeStudioReview {
-		return testResult{localErr: service.TestStudioImageReviewer(ctx, channel)}
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if channel.Type == constant.ChannelTypeStudioReview {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, "/studio-review-test", nil)
+		common.SetContextKey(c, constant.ContextKeyChannelKey, channel.Key)
+		return testResult{context: c, localErr: service.TestStudioImageReviewer(ctx, channel)}
 	}
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
@@ -946,7 +949,7 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 		}
 	}
 
-	if newAPIError == nil {
+	if newAPIError == nil && result.localErr == nil {
 		summary.Succeeded++
 	} else {
 		summary.Failed++

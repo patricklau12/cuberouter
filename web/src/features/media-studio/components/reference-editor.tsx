@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useRef, useState, type PointerEvent } from 'react'
+import { useId, useRef, useState, type PointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -63,6 +63,9 @@ export function ReferenceEditor(props: {
   const [maskOnly, setMaskOnly] = useState(false)
   const [coordinates, setCoordinates] = useState([0.1, 0.1, 0.4, 0.4])
   const [ratio, setRatio] = useState(1)
+  const [cursor, setCursor] = useState<MarkPoint>({ x: 0.5, y: 0.5 })
+  const [keyboardFocus, setKeyboardFocus] = useState(false)
+  const keyboardHelp = useId()
   const pointer = useRef<number | null>(null)
   const surface = useRef<SVGSVGElement>(null)
   const at = (event: PointerEvent<SVGSVGElement>): MarkPoint | undefined => {
@@ -166,6 +169,11 @@ export function ReferenceEditor(props: {
             </label>
           )}
         </div>
+        <p id={keyboardHelp} className='text-muted-foreground text-sm'>
+          {t(
+            'Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.'
+          )}
+        </p>
         <div
           className='relative mx-auto w-full overflow-hidden rounded-lg border bg-black'
           style={{
@@ -188,8 +196,67 @@ export function ReferenceEditor(props: {
             viewBox={`0 0 ${ratio} 1`}
             preserveAspectRatio='none'
             className='absolute inset-0 h-full w-full touch-none'
-            role='img'
+            role='group'
+            tabIndex={0}
             aria-label={t('Reference drawing surface')}
+            aria-describedby={keyboardHelp}
+            onFocus={() => setKeyboardFocus(true)}
+            onBlur={() => setKeyboardFocus(false)}
+            onKeyDown={(event) => {
+              if (pointer.current !== null) return
+              const step = event.shiftKey ? 0.05 : 0.01
+              if (
+                ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(
+                  event.key
+                )
+              ) {
+                event.preventDefault()
+                setCursor((point) => ({
+                  x: Math.max(
+                    0,
+                    Math.min(
+                      1,
+                      point.x +
+                        (event.key === 'ArrowRight' ? step : 0) -
+                        (event.key === 'ArrowLeft' ? step : 0)
+                    )
+                  ),
+                  y: Math.max(
+                    0,
+                    Math.min(
+                      1,
+                      point.y +
+                        (event.key === 'ArrowDown' ? step : 0) -
+                        (event.key === 'ArrowUp' ? step : 0)
+                    )
+                  ),
+                }))
+              } else if (event.key === ' ') {
+                event.preventDefault()
+                if (marks.length >= 100) return
+                setDraft((value) => {
+                  if (!value) {
+                    return { id: newId(), tool, color, width, points: [cursor] }
+                  }
+                  if (value.points.length >= 2048) return value
+                  const points =
+                    value.tool === 'rectangle'
+                      ? [value.points[0], cursor]
+                      : [...value.points, cursor]
+                  return { ...value, points }
+                })
+              } else if (event.key === 'Enter') {
+                event.preventDefault()
+                if (draft && validImageMark(draft)) {
+                  append(draft)
+                  setDraft(undefined)
+                }
+              } else if (event.key === 'Escape' && draft) {
+                event.preventDefault()
+                event.stopPropagation()
+                setDraft(undefined)
+              }
+            }}
             onPointerDown={(event) => {
               if (pointer.current !== null || marks.length >= 100) return
               const point = at(event)
@@ -207,7 +274,7 @@ export function ReferenceEditor(props: {
                     ? {
                         ...value,
                         points:
-                          tool === 'rectangle'
+                          value.tool === 'rectangle'
                             ? [value.points[0], point]
                             : [...value.points, point],
                       }
@@ -221,11 +288,11 @@ export function ReferenceEditor(props: {
               pointer.current = null
               if (draft) {
                 append(
-                  point
+                  point && draft.points.length < 2048
                     ? {
                         ...draft,
                         points:
-                          tool === 'rectangle'
+                          draft.tool === 'rectangle'
                             ? [draft.points[0], point]
                             : [...draft.points, point],
                       }
@@ -239,6 +306,17 @@ export function ReferenceEditor(props: {
               setDraft(undefined)
             }}
           >
+            {keyboardFocus && (
+              <circle
+                cx={cursor.x * ratio}
+                cy={cursor.y}
+                r={0.008 * Math.min(ratio, 1)}
+                fill='white'
+                stroke='black'
+                strokeWidth={0.002}
+                aria-hidden='true'
+              />
+            )}
             {[...marks, ...(draft ? [draft] : [])].map((mark) => (
               <path
                 key={mark.id}

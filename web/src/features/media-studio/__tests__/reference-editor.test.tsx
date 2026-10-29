@@ -96,3 +96,69 @@ test('malformed or unbounded paths cannot be rasterized as a valid region', () =
   )
   expect(markPath({ ...mark, width: Number.NaN })).toBe('')
 })
+
+test.each(['brush', 'lasso'] as const)(
+  'keyboard entry creates a %s mark with the selected tool',
+  (tool) => {
+    const apply = vi.fn()
+    render(
+      <ReferenceEditor
+        image={image}
+        regional
+        onClose={vi.fn()}
+        onApply={apply}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: tool }))
+    const surface = screen.getByLabelText('Reference drawing surface')
+    expect(surface).toHaveAttribute('tabindex', '0')
+    fireEvent.keyDown(surface, { key: ' ' })
+    fireEvent.keyDown(surface, { key: 'ArrowRight' })
+    fireEvent.keyDown(surface, { key: ' ' })
+    fireEvent.keyDown(surface, { key: 'ArrowDown' })
+    fireEvent.keyDown(surface, { key: ' ' })
+    fireEvent.keyDown(surface, { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Use drawing' }))
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marks: [
+          expect.objectContaining({
+            tool,
+            points: [
+              { x: 0.5, y: 0.5 },
+              { x: 0.51, y: 0.5 },
+              { x: 0.51, y: 0.51 },
+            ],
+          }),
+        ],
+      })
+    )
+  }
+)
+
+test('a pointer stroke at the point limit survives release', () => {
+  const apply = vi.fn()
+  render(
+    <ReferenceEditor image={image} regional onClose={vi.fn()} onApply={apply} />
+  )
+  const surface = screen.getByLabelText('Reference drawing surface')
+  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 100,
+    height: 100,
+    right: 100,
+    bottom: 100,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  })
+  fireEvent.pointerDown(surface, { pointerId: 1, clientX: 10, clientY: 10 })
+  for (let i = 1; i < 2048; i++) {
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 20 })
+  }
+  fireEvent.pointerUp(surface, { pointerId: 1, clientX: 30, clientY: 30 })
+  expect(screen.getByRole('button', { name: 'Use drawing' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Use drawing' }))
+  expect(apply.mock.calls[0][0].marks[0].points).toHaveLength(2048)
+})

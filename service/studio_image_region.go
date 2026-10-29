@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"errors"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 
@@ -67,19 +68,34 @@ func CompositeStudioImage(candidate, reference, mask []byte) ([]byte, error) {
 	draw.Draw(result, target, base, bounds.Min, draw.Src)
 	resized := image.NewNRGBA(target)
 	xdraw.CatmullRom.Scale(resized, target, generated, generated.Bounds(), draw.Src, nil)
-	selected := image.NewAlpha(target)
 	hasSelection := false
 	for y := 0; y < target.Dy(); y++ {
 		for x := 0; x < target.Dx(); x++ {
 			_, _, _, alpha := selection.At(x+selection.Bounds().Min.X, y+selection.Bounds().Min.Y).RGBA()
-			selected.Pix[y*selected.Stride+x] = uint8((65535 - alpha) >> 8)
 			hasSelection = hasSelection || alpha < 65535
+			if alpha == 65535 {
+				continue
+			}
+			if alpha == 0 {
+				result.SetNRGBA(x, y, resized.NRGBAAt(x, y))
+				continue
+			}
+			// Interpolate premultiplied pixels by mask coverage. Unlike Over,
+			// source replacement can clear selected transparent output pixels.
+			gr, gg, gb, ga := resized.At(x, y).RGBA()
+			br, bg, bb, ba := result.At(x, y).RGBA()
+			coverage := uint32(65535) - alpha
+			result.Set(x, y, color.RGBA64{
+				R: uint16((gr*coverage + br*alpha) / 65535),
+				G: uint16((gg*coverage + bg*alpha) / 65535),
+				B: uint16((gb*coverage + bb*alpha) / 65535),
+				A: uint16((ga*coverage + ba*alpha) / 65535),
+			})
 		}
 	}
 	if !hasSelection {
 		return nil, failure
 	}
-	draw.DrawMask(result, target, resized, image.Point{}, selected, image.Point{}, draw.Over)
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, result); err != nil {
 		return nil, err

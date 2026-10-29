@@ -174,7 +174,9 @@ export async function submitStudioImage(
       const code: unknown = error.response?.data?.error?.code
       if (
         [400, 401, 403, 409, 413, 429].includes(error.response?.status ?? 0) ||
-        code === 'studio_capacity_unavailable'
+        code === 'studio_capacity_unavailable' ||
+        code === 'studio_access_unavailable' ||
+        code === 'output_check_unavailable'
       ) {
         await pendingStudioImage(owner, null, { expectedKey: record.key })
       }

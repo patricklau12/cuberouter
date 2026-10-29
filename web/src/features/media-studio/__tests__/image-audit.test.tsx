@@ -18,12 +18,68 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { expect, test, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ImageAudit } from '../components/image-audit'
+
+beforeEach(() =>
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+)
+afterEach(() => useAuthStore.getState().auth.reset())
+
+test.each(['0', '-1', '1.5'])(
+  'invalid User ID %s cannot silently request all audit rows',
+  async (value) => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { data: [] } })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ImageAudit />
+      </QueryClientProvider>
+    )
+    await screen.findByText('No image audit records.')
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'User ID' }), {
+      target: { value },
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enter a positive whole-number User ID.'
+    )
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
+    expect(get).toHaveBeenCalledTimes(1)
+    client.clear()
+  }
+)
+
+test('losing root access hides loaded audits and stops further queries', async () => {
+  const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { data: [] } })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <ImageAudit />
+    </QueryClientProvider>
+  )
+  await screen.findByText('No image audit records.')
+  act(() =>
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 1, username: 'root', role: ROLE.ADMIN })
+  )
+  expect(screen.queryByText('Image output audit')).not.toBeInTheDocument()
+  await client.invalidateQueries({ queryKey: ['studio-image-audit'] })
+  expect(get).toHaveBeenCalledTimes(1)
+  client.clear()
+})
 
 test('audit details expose the original instruction and blocked reason; filtering shows only the requested account', async () => {
   const get = vi

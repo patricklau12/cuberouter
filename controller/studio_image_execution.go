@@ -175,6 +175,11 @@ func (execution *studioImageExecution) run(execCtx context.Context, cancel <-cha
 	if middleware.SetupContextForSelectedChannel(c, channel, r.Model) != nil {
 		return studioqueue.Result{Error: "studio_channel_denied"}
 	}
+	select {
+	case <-cancel:
+		return studioqueue.Result{}
+	default:
+	}
 	watchCtx, stopWatch := context.WithCancel(execCtx)
 	defer stopWatch()
 	go cancelStudioImageWorker(watchCtx, channel, job, cancel)

@@ -111,6 +111,13 @@ func TestStudioImageDatabaseContracts(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			assert.Equal(t, "job-a", rows[0].JobID, "a timestamp tie must not skip the next audit row")
+			require.NoError(t, RecordStudioImageAudit(&StudioImageAudit{JobID: "other-account", UserID: 8, CreatedAt: now.UnixMilli()}))
+			rows, err = ListStudioImageAudit(0, 7)
+			require.NoError(t, err)
+			require.Len(t, rows, 2)
+			for _, row := range rows {
+				assert.Equal(t, 7, row.UserID, "account filtering excludes other users' prompts")
+			}
 			require.NoError(t, PruneStudioImageAudits(now.Add(31*24*time.Hour)))
 			var count int64
 			require.NoError(t, db.Model(&StudioImageAudit{}).Count(&count).Error)

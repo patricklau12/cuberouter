@@ -139,7 +139,11 @@ func ReviewStudioPNG(ctx context.Context, job string, image []byte) (StudioRevie
 	// Removing every reviewer still fails closed: enabled Studio has no mode
 	// that can release an unchecked image, so configuration cannot clear a latch.
 	var leases []model.StudioImageLease
-	if model.DB.Find(&leases).Error != nil {
+	resources := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		resources = append(resources, fmt.Sprintf("review:%d", channel.Id))
+	}
+	if model.DB.Where("resource IN ?", resources).Find(&leases).Error != nil {
 		return StudioReview{}, errors.New("output_check_unavailable")
 	}
 	lastUsed := make(map[string]int64)
@@ -251,6 +255,9 @@ func GateStudioImageResponse(c *gin.Context, response *http.Response) error {
 		if err != nil {
 			return errors.New("output_check_unavailable")
 		}
+	}
+	if _, err := png.Decode(bytes.NewReader(image)); err != nil {
+		return errors.New("output_check_unavailable")
 	}
 	if err := review(c.Request.Context(), image); err != nil {
 		return err

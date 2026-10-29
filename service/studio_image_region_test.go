@@ -57,3 +57,23 @@ func TestStudioImageRegionPreservesOutsidePixels(t *testing.T) {
 	_, err = CompositeStudioImage(encode(candidate), encode(base), encode(mask))
 	require.EqualError(t, err, "studio_region_invalid")
 }
+
+func TestStudioImageRegionReplacesTransparentSelectedPixels(t *testing.T) {
+	base := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	base.Set(0, 0, color.NRGBA{R: 180, A: 255})
+	base.Set(1, 0, color.NRGBA{R: 180, A: 255})
+	candidate := image.NewNRGBA(base.Bounds())
+	mask := image.NewNRGBA(base.Bounds())
+	mask.Set(1, 0, color.NRGBA{A: 255})
+	encode := func(img image.Image) []byte {
+		var b bytes.Buffer
+		require.NoError(t, png.Encode(&b, img))
+		return b.Bytes()
+	}
+	out, err := CompositeStudioImage(encode(candidate), encode(base), encode(mask))
+	require.NoError(t, err)
+	decoded, err := png.Decode(bytes.NewReader(out))
+	require.NoError(t, err)
+	assert.Equal(t, color.NRGBA{}, color.NRGBAModel.Convert(decoded.At(0, 0)))
+	assert.Equal(t, base.At(1, 0), color.NRGBAModel.Convert(decoded.At(1, 0)))
+}

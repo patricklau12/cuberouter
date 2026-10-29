@@ -76,6 +76,7 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 	var policy atomic.Value
 	policy.Store("allow")
 	var generations atomic.Int32
+	var cancelOnGeneration atomic.Pointer[chan struct{}]
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -83,6 +84,9 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 			_, _ = io.WriteString(w, `{"state":"ready","gpu_count":1,"control_protocol":"qwen-execution-v1"}`)
 		case "/v1/images/generations":
 			generations.Add(1)
+			if cancel := cancelOnGeneration.Load(); cancel != nil {
+				close(*cancel)
+			}
 			assert.Len(t, r.Header.Get("X-Image-Execution-ID"), 32)
 			data, err := common.Marshal(map[string]any{"created": 1, "data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes())}}})
 			assert.NoError(t, err)
@@ -92,6 +96,9 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, encoded.Bytes(), imageBytes)
 			decision := policy.Load().(string)
+			if decision == "cancel" {
+				decision = "allow"
+			}
 			if decision == "down" {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -104,6 +111,12 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 			data, err := common.Marshal(service.StudioReview{Protocol: "image-moderation-v1", Model: "google/shieldgemma-2-4b-it", Revision: strings.Repeat("a", 40), ImageSHA256: fmt.Sprintf("%x", sha256.Sum256(imageBytes)), Decision: decision, ReleaseAllowed: &allow, WeightsVerified: true, Threshold: func() *float64 { n := 0.5; return &n }(), Scores: map[string]*float64{"sexual": &score, "violence": &score, "dangerous": &score}})
 			assert.NoError(t, err)
 			_, _ = w.Write(data)
+		case "/internal/cancel":
+			var input map[string]string
+			assert.NoError(t, common.DecodeJson(r.Body, &input))
+			data, err := common.Marshal(map[string]string{"protocol": "qwen-execution-v1", "execution_id": input["execution_id"], "state": "cancelling"})
+			assert.NoError(t, err)
+			_, _ = w.Write(data)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -113,7 +126,7 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 	require.NoError(t, model.DB.Create(&model.Channel{Id: 1, Name: "worker", Type: constant.ChannelTypeImageEdit, Status: common.ChannelStatusEnabled, Key: strings.Repeat("g", 32), BaseURL: &base, Group: "default", Models: "studio-native"}).Error)
 	require.NoError(t, model.DB.Create(&model.Channel{Id: 2, Name: "reviewer", Type: constant.ChannelTypeStudioReview, Status: common.ChannelStatusEnabled, Key: strings.Repeat("m", 32), BaseURL: &review, Group: "default", Models: "google/shieldgemma-2-4b-it"}).Error)
 	require.NoError(t, model.DB.Create(&model.Ability{Group: "default", Model: "studio-native", ChannelId: 1, Enabled: true}).Error)
-	for i, decision := range []string{"allow", "block", "down"} {
+	for i, decision := range []string{"allow", "block", "cancel", "down"} {
 		t.Run(decision, func(t *testing.T) {
 			policy.Store(decision)
 			request := []byte(`{"mode":"create","user_prompt":"user prompt","request":{"model":"studio-native","prompt":"model prompt","size":"256x256","n":1,"quality":"standard","num_inference_steps":1,"true_cfg_scale":0,"seed":0}}`)
@@ -122,12 +135,21 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 			require.NotNil(t, reservation)
 			var before model.User
 			require.NoError(t, model.DB.First(&before, 1).Error)
-			result := reservation.Run(context.Background(), make(chan struct{}))
+			cancel := make(chan struct{})
+			cancelOnGeneration.Store(nil)
+			if decision == "cancel" {
+				cancelOnGeneration.Store(&cancel)
+			}
+			result := reservation.Run(context.Background(), cancel)
 			reservation.Release()
 			model.WaitForQuotaCacheWorkers()
 			var after model.User
 			require.NoError(t, model.DB.First(&after, 1).Error)
-			if decision == "allow" {
+			if decision == "cancel" {
+				assert.Empty(t, result.PNG, "an in-flight cancellation discards the reviewed result")
+				assert.Empty(t, result.Error)
+				assert.Equal(t, before.Quota-500, after.Quota, "completed inference still settles its native charge")
+			} else if decision == "allow" {
 				assert.Empty(t, result.Error)
 				assert.Equal(t, encoded.Bytes(), result.PNG)
 				assert.Less(t, after.Quota, before.Quota, "approved output settles native image billing")
@@ -145,7 +167,30 @@ func TestStudioImageNativeRelayReviewAndBilling(t *testing.T) {
 			assert.Equal(t, "user prompt", audit.UserPrompt)
 			assert.Equal(t, "model prompt", audit.ModelPrompt)
 			assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256(encoded.Bytes())), audit.OutputHash)
+			if decision == "cancel" {
+				assert.Equal(t, "cancelled", audit.State)
+			}
 		})
 	}
-	assert.EqualValues(t, 3, generations.Load(), "each accepted job invokes inference once")
+	t.Run("cancelled before provider dispatch", func(t *testing.T) {
+		job := fmt.Sprintf("%032x", 5)
+		request := []byte(`{"mode":"create","user_prompt":"cancelled","request":{"model":"studio-native","prompt":"cancelled","size":"256x256","n":1,"quality":"standard","num_inference_steps":1,"true_cfg_scale":0,"seed":0}}`)
+		reservation := reserveStudioImage(studioqueue.Request{Owner: 1, Key: job, Model: "studio-native", Mode: "create", Body: request}, job)
+		require.NotNil(t, reservation)
+		var before, after model.User
+		require.NoError(t, model.DB.First(&before, 1).Error)
+		cancel := make(chan struct{})
+		close(cancel)
+		result := reservation.Run(context.Background(), cancel)
+		reservation.Release()
+		model.WaitForQuotaCacheWorkers()
+		require.NoError(t, model.DB.First(&after, 1).Error)
+		assert.Empty(t, result.PNG)
+		assert.Empty(t, result.Error)
+		assert.Equal(t, before.Quota, after.Quota)
+		var audit model.StudioImageAudit
+		require.NoError(t, model.DB.First(&audit, "job_id = ?", job).Error)
+		assert.Equal(t, "cancelled", audit.State)
+	})
+	assert.EqualValues(t, 4, generations.Load(), "pre-dispatch cancellation never invokes inference")
 }

@@ -6280,6 +6280,9 @@
     "Image job released": "Image job released",
     "Image job reconnecting": "Image job reconnecting",
     "This job runs on the server. You may refresh and reconnect without generating again.": "This job runs on the server. You may refresh and reconnect without generating again.",
-    "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total.": "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total."
+    "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total.": "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total.",
+    "Image Studio configuration is unavailable. Please try again.": "Image Studio configuration is unavailable. Please try again.",
+    "Enter a positive whole-number User ID.": "Enter a positive whole-number User ID.",
+    "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.": "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards."
   }
 }

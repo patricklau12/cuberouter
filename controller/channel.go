@@ -661,6 +661,9 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	if addChannelRequest.Mode == "multi_to_single" && addChannelRequest.Channel != nil {
+		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
+	}
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1017,14 +1020,6 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(channel.Id, true)
 	if err != nil {
@@ -1044,6 +1039,10 @@ func UpdateChannel(c *gin.Context) {
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
+	if err := validateChannel(&channel.Channel, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 
 	if channelHasSensitiveChanges(&channel, originChannel, requestData) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {

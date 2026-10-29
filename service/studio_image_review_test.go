@@ -93,3 +93,21 @@ func TestStudioReviewGateNeverWritesUnreviewedOutput(t *testing.T) {
 	r.Body = io.NopCloser(strings.NewReader(`{"data":[{"url":"https://unreviewed.example/image.png"}]}`))
 	require.EqualError(t, GateStudioImageResponse(c, r), "output_check_unavailable")
 }
+
+func TestStudioReviewGateRejectsCorruptPixelDataBeforeReview(t *testing.T) {
+	var encoded bytes.Buffer
+	require.NoError(t, png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	// A complete IHDR passes DecodeConfig even when all pixel chunks are missing.
+	corrupt := encoded.Bytes()[:33]
+	_, err := png.DecodeConfig(bytes.NewReader(corrupt))
+	require.NoError(t, err)
+	payload, err := common.Marshal(map[string]any{"data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(corrupt)}}})
+	require.NoError(t, err)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	reviewed := false
+	c.Set(StudioReviewContext, func(context.Context, []byte) error { reviewed = true; return nil })
+	r := &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(payload))}
+	require.EqualError(t, GateStudioImageResponse(c, r), "output_check_unavailable")
+	assert.False(t, reviewed, "corrupt bytes must never reach the reviewer")
+}

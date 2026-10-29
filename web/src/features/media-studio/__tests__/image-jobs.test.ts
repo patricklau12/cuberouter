@@ -105,7 +105,7 @@ test('server image defaults preserve explicit zero CFG and seed values', async (
   )
 })
 
-test('reconnecting collects the reviewed PNG without resubmitting or acknowledging before local save', async () => {
+test('reconnecting collects the reviewed PNG without resubmitting or acknowledging', async () => {
   await pendingStudioImage(1, record)
   http.get
     .mockResolvedValueOnce({ data: { ...status, state: 'completed' } })
@@ -125,6 +125,32 @@ test('reconnecting collects the reviewed PNG without resubmitting or acknowledgi
     expect.objectContaining({ responseType: 'blob' })
   )
   expect(http.post).not.toHaveBeenCalled()
+})
+
+test.each(['studio_access_unavailable', 'output_check_unavailable'])(
+  'a pre-acceptance %s rejection clears pending identity for a later submit',
+  async (code) => {
+    http.get.mockResolvedValue({ data: { epoch: 'boot-a' } })
+    http.post.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 503, data: { error: { code } } },
+    })
+    await expect(submitStudioImage(1, record.draft)).rejects.toThrow()
+    expect(await pendingStudioImage(1)).toBeUndefined()
+  }
+)
+
+test('an audit-write 503 after acceptance keeps the pending identity for recovery', async () => {
+  http.get.mockResolvedValue({ data: { epoch: 'boot-a' } })
+  http.post.mockRejectedValue({
+    isAxiosError: true,
+    response: {
+      status: 503,
+      data: { error: { code: 'studio_audit_unavailable' } },
+    },
+  })
+  await expect(submitStudioImage(1, record.draft)).rejects.toThrow()
+  expect(await pendingStudioImage(1)).toBeDefined()
 })
 
 test('a blocked job never requests image bytes or creates browser artwork', async () => {

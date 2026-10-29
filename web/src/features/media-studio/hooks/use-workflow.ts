@@ -86,6 +86,15 @@ export function useWorkflow(owner: number) {
     mutationFn: async (
       draft: WorkflowDraft & { resume?: PendingStudioImage }
     ) => {
+      let config = configuration.data
+      if (!draft.resume && !config) {
+        config = (await configuration.refetch()).data
+        if (!config) {
+          throw new Error(
+            'Image Studio configuration is unavailable. Please try again.'
+          )
+        }
+      }
       started.current = Date.now()
       setElapsed(0)
       setWarning('')
@@ -95,8 +104,8 @@ export function useWorkflow(owner: number) {
       const queued =
         !!draft.resume ||
         !!(
-          configuration.data?.image_queue_enabled &&
-          configuration.data.image_queue_models?.includes(draft.model)
+          config?.image_queue_enabled &&
+          config.image_queue_models?.includes(draft.model)
         )
       let output: { job: WorkflowJob; warning?: string }
       let pendingRecord: PendingStudioImage | undefined

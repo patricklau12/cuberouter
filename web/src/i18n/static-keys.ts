@@ -868,6 +868,7 @@ export const STATIC_I18N_KEYS = [
   'text',
   'unavailable',
   // Image jobs, drawing tools and official samples.
+  'Image Studio configuration is unavailable. Please try again.',
   'Server image job',
   'Queued: {{count}} jobs ahead',
   'Refreshing reconnects to this job without generating again. Images are released only after output review.',
