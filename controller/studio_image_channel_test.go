@@ -53,7 +53,7 @@ func TestStudioReviewerValidationRejectsEmptyStoredServiceKey(t *testing.T) {
 	require.ErrorContains(t, err, "one service key")
 }
 
-func TestStudioReviewerValidationMeasuresUnpaddedKeyLength(t *testing.T) {
+func TestStudioReviewerValidationChecksCredentialWhitespace(t *testing.T) {
 	base := "http://127.0.0.1:19001/moderate"
 	for _, tc := range []struct {
 		name  string
@@ -63,6 +63,9 @@ func TestStudioReviewerValidationMeasuresUnpaddedKeyLength(t *testing.T) {
 		{"spaces provide no credential", strings.Repeat(" ", 32), false},
 		{"tabs provide no credential", strings.Repeat("\t", 32), false},
 		{"padding cannot extend a short credential", strings.Repeat("s", 31) + " ", false},
+		{"embedded space is not a single credential", strings.Repeat("s", 16) + " " + strings.Repeat("s", 16), false},
+		{"embedded tab is not a single credential", strings.Repeat("s", 16) + "\t" + strings.Repeat("s", 16), false},
+		{"embedded Unicode whitespace is not a single credential", strings.Repeat("s", 16) + "\u00a0" + strings.Repeat("s", 16), false},
 		{"minimum length credential with trailing space remains valid", strings.Repeat("s", 32) + " ", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,6 +73,7 @@ func TestStudioReviewerValidationMeasuresUnpaddedKeyLength(t *testing.T) {
 			if tc.valid {
 				require.NoError(t, validateChannel(channel, true))
 				require.NoError(t, validateChannel(channel, false))
+				assert.Equal(t, tc.key, channel.Key, "validation preserves the accepted service key")
 				return
 			}
 			require.ErrorContains(t, validateChannel(channel, true), "one service key")
@@ -156,8 +160,10 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 		{"short key without type", map[string]any{"key": "short"}, false},
 		{"newline key without type", map[string]any{"key": strings.Repeat("s", 32) + "\n"}, false},
 		{"whitespace key without type", map[string]any{"key": strings.Repeat(" ", 32)}, false},
+		{"embedded whitespace key without type", map[string]any{"key": strings.Repeat("s", 16) + " " + strings.Repeat("s", 16)}, false},
 		{"invalid CA without type", map[string]any{"other": "invalid certificate"}, false},
 		{"valid key without base URL", map[string]any{"key": strings.Repeat("n", 32)}, true},
+		{"valid key retains trailing padding", map[string]any{"key": strings.Repeat("n", 32) + " "}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupModelListControllerTestDB(t)
@@ -182,6 +188,9 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 			require.NoError(t, db.First(&after, stored.Id).Error)
 			assert.Equal(t, constant.ChannelTypeStudioReview, after.Type)
 			assert.Equal(t, base, after.GetBaseURL())
+			if key, ok := tc.patch["key"].(string); ok && tc.wantSuccess {
+				assert.Equal(t, key, after.Key)
+			}
 			if !tc.wantSuccess {
 				assert.Equal(t, stored.Key, after.Key)
 				assert.Empty(t, after.Other)
@@ -202,6 +211,7 @@ func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
 		{"prefix names are independent for each key", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32), []string{strings.Repeat("v", 32), strings.Repeat("s", 32)}, []string{"reviewer vvvvvvvv", "reviewer ssssssss"}},
 		{"later invalid header key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32) + "\r", nil, nil},
 		{"later whitespace key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat(" ", 32), nil, nil},
+		{"later embedded whitespace key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 16) + "\t" + strings.Repeat("s", 16), nil, nil},
 		{"empty batch is rejected", "\n", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

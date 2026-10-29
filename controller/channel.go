@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -479,7 +480,8 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 	if channel.Type == constant.ChannelTypeStudioReview {
-		if channel.ChannelInfo.IsMultiKey || len(strings.TrimSpace(channel.Key)) < 32 || !httpguts.ValidHeaderFieldValue(channel.Key) {
+		trimmedKey := strings.TrimSpace(channel.Key)
+		if channel.ChannelInfo.IsMultiKey || len(trimmedKey) < 32 || strings.IndexFunc(trimmedKey, unicode.IsSpace) >= 0 || !httpguts.ValidHeaderFieldValue(channel.Key) {
 			return fmt.Errorf("image review channels require one service key of at least 32 characters")
 		}
 		if _, err := service.StudioPrivateClient(channel.GetBaseURL(), channel.Other, 45*time.Second); err != nil {
