@@ -61,7 +61,12 @@ func StartStudioImageMaintenance() {
 func imageJobs() *studioqueue.Queue {
 	studioQueueOnce.Do(func() {
 		studioQueue = studioqueue.New(reserveStudioImage, func(status studioqueue.Status) {
-			if model.UpdateStudioImageAudit(status.ID, map[string]any{"state": status.State}) != nil {
+			// The output gate already committed approval. A delayed completion
+			// notification must not overwrite a subsequent cancellation.
+			if status.State == "completed" {
+				return
+			}
+			if model.UpdateStudioImageAudit(status.ID, map[string]any{"state": status.State, "failure": status.Error}) != nil {
 				common.SysError("Image Studio lifecycle audit failed")
 			}
 		})

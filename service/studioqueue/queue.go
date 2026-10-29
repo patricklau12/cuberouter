@@ -339,7 +339,13 @@ func (q *Queue) execute(ctx context.Context, e *entry, reservation *Reservation)
 		result = reservation.Run(execCtx, e.stop)
 	}()
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	defer func() {
+		status := q.statusLocked(e)
+		q.mu.Unlock()
+		if q.onState != nil {
+			q.onState(status)
+		}
+	}()
 	q.bytes -= len(e.request.Body) + MaxResultBytes
 	e.request.Body, e.active, e.ended = nil, false, time.Now()
 	if e.status.CancelRequested {

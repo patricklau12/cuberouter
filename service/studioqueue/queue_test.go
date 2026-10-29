@@ -149,3 +149,22 @@ func TestStudioQueueAcknowledgementReleasesResultAndPreservesKey(t *testing.T) {
 	assert.Equal(t, s.ID, again.ID)
 	assert.Equal(t, "released", again.State)
 }
+
+func TestStudioQueuePublishesFailureForAuditBeforeReleasingCapacity(t *testing.T) {
+	released := make(chan struct{})
+	var observed Status
+	q := New(func(Request, string) *Reservation {
+		return &Reservation{
+			Run:     func(context.Context, <-chan struct{}) Result { return Result{Error: "studio_access_denied"} },
+			Release: func() { close(released) },
+		}
+	}, func(status Status) { observed = status })
+	r := Request{Owner: 1, Key: strings.Repeat("a", 32), Body: []byte("input")}
+	s, err := q.Submit(r, q.Epoch(), time.Now())
+	require.NoError(t, err)
+	q.Tick(context.Background(), time.Now())
+	<-released
+	assert.Equal(t, s.ID, observed.ID)
+	assert.Equal(t, "failed", observed.State)
+	assert.Equal(t, "studio_access_denied", observed.Error)
+}
