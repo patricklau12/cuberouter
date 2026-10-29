@@ -188,6 +188,9 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 			require.NoError(t, db.First(&after, stored.Id).Error)
 			assert.Equal(t, constant.ChannelTypeStudioReview, after.Type)
 			assert.Equal(t, base, after.GetBaseURL())
+			if name, ok := tc.patch["name"].(string); ok && tc.wantSuccess {
+				assert.Equal(t, name, after.Name)
+			}
 			if key, ok := tc.patch["key"].(string); ok && tc.wantSuccess {
 				assert.Equal(t, key, after.Key)
 			}
