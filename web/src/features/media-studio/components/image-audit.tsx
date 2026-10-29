@@ -38,6 +38,7 @@ interface ImageAuditRow {
   review: string
   channel_id: number
   state: string
+  error?: string
   created_at: number
 }
 
@@ -90,8 +91,8 @@ export function ImageAudit() {
       {rows.data?.map((row) => (
         <details key={row.job_id} className='rounded-xl border p-4'>
           <summary className='cursor-pointer break-all'>
-            {new Date(row.created_at).toLocaleString()} Â· {row.model} Â·{' '}
-            {row.state} Â· #{row.user_id} Â· {row.job_id}
+            {new Date(row.created_at).toLocaleString()} / {row.model} /{' '}
+            {row.state} / #{row.user_id} / {row.job_id}
           </summary>
           <dl className='mt-3 grid gap-2 text-sm'>
             {(
@@ -102,6 +103,7 @@ export function ImageAudit() {
                 ['Input hashes', row.input_hashes],
                 ['Output hash', row.output_hash],
                 ['Output review', row.review],
+                ['Error', row.error ?? ''],
                 ['Channel ID', String(row.channel_id)],
               ] as const
             ).map(([label, value]) => (
