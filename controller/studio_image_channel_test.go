@@ -53,6 +53,31 @@ func TestStudioReviewerValidationRejectsEmptyStoredServiceKey(t *testing.T) {
 	require.ErrorContains(t, err, "one service key")
 }
 
+func TestStudioReviewerValidationMeasuresUnpaddedKeyLength(t *testing.T) {
+	base := "http://127.0.0.1:19001/moderate"
+	for _, tc := range []struct {
+		name  string
+		key   string
+		valid bool
+	}{
+		{"spaces provide no credential", strings.Repeat(" ", 32), false},
+		{"tabs provide no credential", strings.Repeat("\t", 32), false},
+		{"padding cannot extend a short credential", strings.Repeat("s", 31) + " ", false},
+		{"minimum length credential with trailing space remains valid", strings.Repeat("s", 32) + " ", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Key: tc.key, BaseURL: &base}
+			if tc.valid {
+				require.NoError(t, validateChannel(channel, true))
+				require.NoError(t, validateChannel(channel, false))
+				return
+			}
+			require.ErrorContains(t, validateChannel(channel, true), "one service key")
+			require.ErrorContains(t, validateChannel(channel, false), "one service key")
+		})
+	}
+}
+
 func TestStudioReviewerValidationRejectsInvalidHeaderBytes(t *testing.T) {
 	base := "http://127.0.0.1:19001/moderate"
 	for _, tc := range []struct {
@@ -130,6 +155,7 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 		{"name only preserves valid connection", map[string]any{"name": "renamed"}, true},
 		{"short key without type", map[string]any{"key": "short"}, false},
 		{"newline key without type", map[string]any{"key": strings.Repeat("s", 32) + "\n"}, false},
+		{"whitespace key without type", map[string]any{"key": strings.Repeat(" ", 32)}, false},
 		{"invalid CA without type", map[string]any{"other": "invalid certificate"}, false},
 		{"valid key without base URL", map[string]any{"key": strings.Repeat("n", 32)}, true},
 	} {
@@ -166,20 +192,23 @@ func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.
 
 func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		keys     string
-		wantKeys []string
+		name      string
+		keys      string
+		wantKeys  []string
+		wantNames []string
 	}{
-		{"later short key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 31), nil},
-		{"two minimum-length keys are saved independently", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32), []string{strings.Repeat("v", 32), strings.Repeat("s", 32)}},
-		{"later invalid header key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32) + "\r", nil},
-		{"empty batch is rejected", "\n", nil},
+		{"later short key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 31), nil, nil},
+		{"two minimum-length keys are saved independently", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32), []string{strings.Repeat("v", 32), strings.Repeat("s", 32)}, nil},
+		{"prefix names are independent for each key", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32), []string{strings.Repeat("v", 32), strings.Repeat("s", 32)}, []string{"reviewer vvvvvvvv", "reviewer ssssssss"}},
+		{"later invalid header key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat("s", 32) + "\r", nil, nil},
+		{"later whitespace key rejects the entire batch", strings.Repeat("v", 32) + "\n" + strings.Repeat(" ", 32), nil, nil},
+		{"empty batch is rejected", "\n", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupModelListControllerTestDB(t)
 			base := "http://127.0.0.1:19001/moderate"
 			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: tc.keys, BaseURL: &base}
-			payload, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: channel})
+			payload, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: channel, BatchAddSetKeyPrefix2Name: tc.wantNames != nil})
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
@@ -198,6 +227,11 @@ func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
 				var storedKeys []string
 				require.NoError(t, db.Model(&model.Channel{}).Order("id").Pluck("key", &storedKeys).Error)
 				assert.Equal(t, tc.wantKeys, storedKeys, "each row retains its corresponding input key")
+			}
+			if tc.wantNames != nil {
+				var storedNames []string
+				require.NoError(t, db.Model(&model.Channel{}).Order("id").Pluck("name", &storedNames).Error)
+				assert.Equal(t, tc.wantNames, storedNames, "each name uses the original base name and only its own key prefix")
 			}
 		})
 	}

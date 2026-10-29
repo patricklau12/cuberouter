@@ -479,7 +479,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 	if channel.Type == constant.ChannelTypeStudioReview {
-		if channel.ChannelInfo.IsMultiKey || len(channel.Key) < 32 || !httpguts.ValidHeaderFieldValue(channel.Key) {
+		if channel.ChannelInfo.IsMultiKey || len(strings.TrimSpace(channel.Key)) < 32 || !httpguts.ValidHeaderFieldValue(channel.Key) {
 			return fmt.Errorf("image review channels require one service key of at least 32 characters")
 		}
 		if _, err := service.StudioPrivateClient(channel.GetBaseURL(), channel.Other, 45*time.Second); err != nil {
@@ -736,7 +736,8 @@ func AddChannel(c *gin.Context) {
 		if key == "" {
 			continue
 		}
-		localChannel := addChannelRequest.Channel
+		channelCopy := *addChannelRequest.Channel
+		localChannel := &channelCopy
 		localChannel.Key = key
 		if localChannel.Type == constant.ChannelTypeStudioReview {
 			if err := validateChannel(localChannel, true); err != nil {
