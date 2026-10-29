@@ -1,5 +1,7 @@
 # CubeRouter Media Studio
 
+Optional native server jobs, output review, cancellation and recovery are documented in [Native Image Studio server jobs](image-studio-server-jobs.md).
+
 Media Studio at `/media-studio` uses CubeRouter image channels. The application no longer embeds a node-specific Python workflow, SSH tunnel or additional Compose stack. Normal CubeRouter deployment is sufficient for text-to-image, and for editing, which sends the reference image inline as base64.
 
 ## Request and storage flow

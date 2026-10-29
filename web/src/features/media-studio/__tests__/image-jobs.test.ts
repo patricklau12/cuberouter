@@ -1,0 +1,214 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+Copyright (C) 2026 CubeRouter
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { IDBFactory } from 'fake-indexeddb'
+import { beforeEach, expect, test, vi } from 'vitest'
+
+import {
+  cancelStudioImage,
+  acknowledgeStudioImage,
+  collectStudioImage,
+  IMAGE_JOBS,
+  pendingStudioImage,
+  submitStudioImage,
+  type ImageJobStatus,
+  type PendingStudioImage,
+} from '../lib/image-jobs'
+import { initialDraft } from '../lib/workflow'
+
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
+vi.mock('@/lib/api', () => ({ api: http }))
+const record: PendingStudioImage = {
+  key: 'unique-request-1234',
+  epoch: 'boot-a',
+  started: 1,
+  draft: { ...initialDraft, model: 'qwen-image-2.1', prompt: 'a cat' },
+}
+const status: ImageJobStatus = {
+  id: 'job-a',
+  key: record.key,
+  epoch: record.epoch,
+  state: 'running',
+  ahead: 0,
+  recovery_pending: false,
+  cancel_requested: false,
+  created_at: 1,
+}
+beforeEach(() => {
+  vi.stubGlobal('indexedDB', new IDBFactory())
+  http.get.mockReset()
+  http.post.mockReset()
+})
+
+test('pending drafts are isolated by account and reject an invalid owner', async () => {
+  await pendingStudioImage(1, record)
+  expect(await pendingStudioImage(2)).toBeUndefined()
+  expect((await pendingStudioImage(1))?.draft.prompt).toBe('a cat')
+  await expect(pendingStudioImage(0, record)).rejects.toThrow('Sign in')
+})
+
+test('a lost submit response keeps its persisted identity and blocks a second inference', async () => {
+  http.get.mockResolvedValue({ data: { epoch: 'boot-a' } })
+  http.post.mockImplementation(async () => {
+    expect(await pendingStudioImage(1)).toBeDefined()
+    throw new Error('connection lost')
+  })
+  await expect(submitStudioImage(1, record.draft)).rejects.toThrow(
+    'connection lost'
+  )
+  expect(await pendingStudioImage(1)).toBeDefined()
+  await expect(submitStudioImage(1, record.draft)).rejects.toThrow('Reconnect')
+  expect(http.post).toHaveBeenCalledTimes(1)
+  expect(http.post).toHaveBeenCalledWith(
+    IMAGE_JOBS,
+    expect.objectContaining({
+      request: expect.objectContaining({
+        num_inference_steps: 40,
+        true_cfg_scale: 1,
+      }),
+    }),
+    expect.anything()
+  )
+})
+
+test('server image defaults preserve explicit zero CFG and seed values', async () => {
+  http.get.mockResolvedValue({ data: { epoch: 'boot-a' } })
+  http.post.mockResolvedValue({ data: status })
+  await submitStudioImage(1, { ...record.draft, steps: 8, cfg: 0, seed: 0 })
+  expect(http.post).toHaveBeenCalledWith(
+    IMAGE_JOBS,
+    expect.objectContaining({
+      request: expect.objectContaining({
+        num_inference_steps: 8,
+        true_cfg_scale: 0,
+        seed: 0,
+      }),
+    }),
+    expect.anything()
+  )
+})
+
+test('reconnecting collects the reviewed PNG without resubmitting or acknowledging before local save', async () => {
+  await pendingStudioImage(1, record)
+  http.get
+    .mockResolvedValueOnce({ data: { ...status, state: 'completed' } })
+    .mockResolvedValueOnce({
+      data: new Blob(['reviewed'], { type: 'image/png' }),
+    })
+  const output = await collectStudioImage(
+    1,
+    record,
+    new AbortController().signal,
+    vi.fn()
+  )
+  expect(output.id).toBe('job-a')
+  expect(output.images[0].url).toMatch(/^data:image\/png;base64,/)
+  expect(http.get).toHaveBeenLastCalledWith(
+    `${IMAGE_JOBS}/job-a/result`,
+    expect.objectContaining({ responseType: 'blob' })
+  )
+  expect(http.post).not.toHaveBeenCalled()
+})
+
+test('a blocked job never requests image bytes or creates browser artwork', async () => {
+  await pendingStudioImage(1, record)
+  http.get.mockResolvedValue({
+    data: { ...status, state: 'failed', error: 'output_blocked' },
+  })
+  await expect(
+    collectStudioImage(1, record, new AbortController().signal, vi.fn())
+  ).rejects.toThrow('did not pass output review')
+  expect(http.get).toHaveBeenCalledTimes(1)
+  expect(http.post).not.toHaveBeenCalled()
+})
+
+test('lost cancellation is remembered and reconnect retries only the cancellation', async () => {
+  await pendingStudioImage(1, record)
+  http.post.mockRejectedValue(new Error('lost cancel response'))
+  await expect(cancelStudioImage(1, record, status)).rejects.toThrow(
+    'lost cancel response'
+  )
+  expect((await pendingStudioImage(1))?.cancelRequested).toBe(true)
+  http.get.mockResolvedValue({ data: status })
+  http.post.mockRejectedValue(new Error('cancel retry'))
+  await expect(
+    collectStudioImage(1, record, new AbortController().signal, vi.fn())
+  ).rejects.toThrow('cancel retry')
+  expect(http.post).toHaveBeenLastCalledWith(
+    `${IMAGE_JOBS}/job-a/cancel`,
+    {},
+    expect.anything()
+  )
+  expect(
+    http.post.mock.calls.every((call) => call[0].endsWith('/cancel'))
+  ).toBe(true)
+})
+
+test('a changed gateway epoch marks the draft recoverable without replaying generation', async () => {
+  http.get.mockResolvedValue({ data: { ...status, epoch: 'boot-b' } })
+  const progress = vi.fn()
+  await expect(
+    collectStudioImage(1, record, new AbortController().signal, progress)
+  ).rejects.toThrow('restarted')
+  expect(progress).toHaveBeenLastCalledWith(
+    expect.objectContaining({ state: 'expired' })
+  )
+  expect(http.post).not.toHaveBeenCalled()
+})
+
+test('two tabs racing to submit claim one recovery record and make one inference request', async () => {
+  http.get.mockResolvedValue({ data: { epoch: 'boot-a' } })
+  http.post.mockResolvedValue({ data: status })
+  const attempts = await Promise.allSettled([
+    submitStudioImage(1, record.draft),
+    submitStudioImage(1, record.draft),
+  ])
+  expect(attempts.filter((value) => value.status === 'fulfilled')).toHaveLength(
+    1
+  )
+  expect(http.post).toHaveBeenCalledTimes(1)
+})
+
+test('cancellation intent wins over a completed response before any result is downloaded', async () => {
+  await pendingStudioImage(1, { ...record, cancelRequested: true })
+  http.get
+    .mockResolvedValueOnce({ data: { ...status, state: 'completed' } })
+    .mockResolvedValueOnce({
+      data: { ...status, state: 'cancelled', cancel_requested: true },
+    })
+  http.post.mockResolvedValue({ data: { ...status, state: 'cancelled' } })
+  await expect(
+    collectStudioImage(1, record, new AbortController().signal, vi.fn())
+  ).rejects.toThrow()
+  expect(http.post).toHaveBeenCalledWith(
+    `${IMAGE_JOBS}/job-a/cancel`,
+    {},
+    expect.anything()
+  )
+  expect(http.get.mock.calls.some((call) => call[0].endsWith('/result'))).toBe(
+    false
+  )
+})
+
+test('a late acknowledgement from an old tab cannot erase a newer recovery record', async () => {
+  await pendingStudioImage(1, { ...record, key: 'newer-request-1234' })
+  http.post.mockResolvedValue({})
+  await acknowledgeStudioImage(1, 'old-job', record.key)
+  expect((await pendingStudioImage(1))?.key).toBe('newer-request-1234')
+})

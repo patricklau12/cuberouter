@@ -24,14 +24,20 @@ const MAX_ENTRIES = 50
 const MAX_BYTES = 100 * 1024 * 1024
 
 // A separate database per signed-in account prevents history appearing after account switches.
-async function database(owner: number): Promise<IDBDatabase> {
+export async function studioDatabase(owner: number): Promise<IDBDatabase> {
   if (!Number.isSafeInteger(owner) || owner <= 0) {
     throw new Error('Sign in to use Media Studio.')
   }
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(`cuberouter-studio-${owner}`, 1)
-    request.onupgradeneeded = () =>
-      request.result.createObjectStore('jobs', { keyPath: 'id' })
+    const request = indexedDB.open(`cuberouter-studio-${owner}`, 2)
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('jobs')) {
+        request.result.createObjectStore('jobs', { keyPath: 'id' })
+      }
+      if (!request.result.objectStoreNames.contains('pending')) {
+        request.result.createObjectStore('pending')
+      }
+    }
     request.onsuccess = () => {
       // 每次打开都会走到这里，函数内部用 persisted() 与标记位去重。
       void requestStudioPersistence()
@@ -41,7 +47,7 @@ async function database(owner: number): Promise<IDBDatabase> {
   })
 }
 export async function listStudioJobs(owner: number): Promise<WorkflowJob[]> {
-  const db = await database(owner)
+  const db = await studioDatabase(owner)
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction('jobs', 'readonly')
@@ -80,7 +86,7 @@ export async function saveStudioJob(
       'This result is too large for local history. Download it before leaving this page.'
     )
   }
-  const db = await database(owner)
+  const db = await studioDatabase(owner)
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction('jobs', 'readwrite'),
@@ -111,7 +117,7 @@ export async function deleteStudioJob(
   owner: number,
   id?: string
 ): Promise<void> {
-  const db = await database(owner)
+  const db = await studioDatabase(owner)
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction('jobs', 'readwrite'),

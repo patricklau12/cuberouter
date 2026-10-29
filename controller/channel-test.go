@@ -70,6 +70,9 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	if channel.Type == constant.ChannelTypeStudioReview {
+		return testResult{localErr: service.TestStudioImageReviewer(ctx, channel)}
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

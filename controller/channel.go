@@ -477,6 +477,14 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if channel.Type == constant.ChannelTypeStudioReview {
+		if channel.ChannelInfo.IsMultiKey || ((isAdd || channel.Key != "") && len(channel.Key) < 32) {
+			return fmt.Errorf("image review channels require one service key of at least 32 characters")
+		}
+		if _, err := service.StudioPrivateClient(channel.GetBaseURL(), channel.Other, 45*time.Second); err != nil {
+			return err
+		}
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
