@@ -214,6 +214,15 @@ test('a late acknowledgement from an old tab cannot erase a newer recovery recor
   expect((await pendingStudioImage(1))?.key).toBe('newer-request-1234')
 })
 
+test('a stale tab cancelling an acknowledged job cannot recreate its cleared recovery record', async () => {
+  await pendingStudioImage(1, record)
+  http.post.mockResolvedValue({})
+  await acknowledgeStudioImage(1, status.id, record.key)
+  expect(await pendingStudioImage(1)).toBeUndefined()
+  await cancelStudioImage(1, record, status)
+  expect(await pendingStudioImage(1)).toBeUndefined()
+})
+
 test('cancellation recorded while downloading discards the received PNG before creating artwork', async () => {
   await pendingStudioImage(1, record)
   http.get

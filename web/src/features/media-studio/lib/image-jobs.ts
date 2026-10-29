@@ -79,7 +79,7 @@ export async function pendingStudioImage(
         result = read.result as PendingStudioImage | undefined
         if (
           value === undefined ||
-          (options.expectedKey && result && result.key !== options.expectedKey)
+          (options.expectedKey && result?.key !== options.expectedKey)
         ) {
           return
         }
