@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 
 import { ReferenceEditor } from '../components/reference-editor'
@@ -154,9 +154,11 @@ test('a pointer stroke at the point limit survives release', () => {
     toJSON: () => ({}),
   })
   fireEvent.pointerDown(surface, { pointerId: 1, clientX: 10, clientY: 10 })
-  for (let i = 1; i < 2048; i++) {
-    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 20 })
-  }
+  act(() => {
+    for (let i = 1; i < 2048; i++) {
+      fireEvent.pointerMove(surface, { pointerId: 1, clientX: 20, clientY: 20 })
+    }
+  })
   fireEvent.pointerUp(surface, { pointerId: 1, clientX: 30, clientY: 30 })
   expect(screen.getByRole('button', { name: 'Use drawing' })).toBeEnabled()
   fireEvent.click(screen.getByRole('button', { name: 'Use drawing' }))
