@@ -57,10 +57,8 @@ func StudioImageChannelIDs() []int {
 		}
 		ids = append(ids, id)
 	}
-	// Invalid oversized configuration is never silently truncated.
-	if len(ids) > 64 {
-		return nil
-	}
+	// Keep every configured ID reserved from ordinary traffic, even when an
+	// oversized pool is rejected for Studio admission below.
 	return ids
 }
 
@@ -81,7 +79,7 @@ func StudioImageGroupAllowed(group string) bool {
 // an unavailable high-priority channel cannot hide a healthy lower replica.
 func ReadyStudioImageChannels(ctx context.Context, group, modelName string) []*model.Channel {
 	ids := StudioImageChannelIDs()
-	if len(ids) == 0 {
+	if len(ids) == 0 || len(ids) > 64 {
 		return nil
 	}
 	channels, err := model.StudioImageWorkerChannels(ids, group, modelName)
