@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -114,7 +114,13 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [userDetail, setUserDetail] = useState<User | null>(null)
   const [isSavingDiscounts, setIsSavingDiscounts] = useState(false)
+  // 跟踪当前抽屉展示的用户，异步响应回来时据此丢弃上一个用户的旧数据。
+  const activeUserIdRef = useRef<number | undefined>(currentRow?.id)
+  useEffect(() => {
+    activeUserIdRef.current = currentRow?.id
+  }, [currentRow?.id])
   // Discounts edited in this drawer session. Null means the editor still shows
   // the server's copy of the user.
   const [editedDiscounts, setEditedDiscounts] =
@@ -163,18 +169,28 @@ export function UsersMutateDrawer({
 
   // Load existing data when updating
   useEffect(() => {
+    let cancelled = false
     if (open && isUpdate && currentRow) {
       // The drawer outlives a close (the page only swaps `currentRow`), so
       // discounts edited for the previous user must not survive into this one.
       setEditedDiscounts(null)
+      setUserDetail(null)
       // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformUserToFormDefaults(result.data))
-        }
-      })
+      getUser(currentRow.id)
+        .then((result) => {
+          if (cancelled) return
+          if (result.success && result.data) {
+            setUserDetail(result.data)
+            form.reset(transformUserToFormDefaults(result.data))
+          }
+        })
+        .catch(() => undefined)
+      return () => {
+        cancelled = true
+      }
     } else if (open && !isUpdate) {
       // For create, reset to defaults
+      setUserDetail(null)
       form.reset(USER_FORM_DEFAULT_VALUES)
     }
   }, [open, isUpdate, currentRow, form])
@@ -239,7 +255,7 @@ export function UsersMutateDrawer({
               : t(ERROR_MESSAGES.CREATE_FAILED))
         )
       }
-    } catch (_error) {
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -249,7 +265,12 @@ export function UsersMutateDrawer({
   const refreshUserData = async () => {
     if (!currentRow) return
     const result = await getUser(currentRow.id)
-    if (result.success && result.data) {
+    if (
+      result.success &&
+      result.data &&
+      result.data.id === activeUserIdRef.current
+    ) {
+      setUserDetail(result.data)
       form.reset(transformUserToFormDefaults(result.data))
     }
     triggerRefresh()
@@ -450,12 +471,10 @@ export function UsersMutateDrawer({
                       <FormItem>
                         <FormLabel>{t('Group')}</FormLabel>
                         <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
+                          items={groups.map((group) => ({
+                            value: group,
+                            label: group,
+                          }))}
                           onValueChange={field.onChange}
                           value={field.value}
                         >
@@ -507,7 +526,7 @@ export function UsersMutateDrawer({
                             onClick={() => setQuotaDialogOpen(true)}
                           >
                             <Pencil className='mr-1 h-4 w-4' />
-                            {t('Adjust Quota')}
+                            {t('Top-up')}
                           </Button>
                         </div>
                         <FormDescription>
@@ -702,7 +721,7 @@ export function UsersMutateDrawer({
         <UserQuotaDialog
           open={quotaDialogOpen}
           onOpenChange={setQuotaDialogOpen}
-          userId={currentRow.id}
+          user={userDetail ?? currentRow}
           currentQuota={parseQuotaFromDollars(currentQuotaRaw || 0)}
           onSuccess={refreshUserData}
         />
