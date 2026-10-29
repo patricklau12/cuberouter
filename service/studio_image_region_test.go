@@ -77,3 +77,22 @@ func TestStudioImageRegionReplacesTransparentSelectedPixels(t *testing.T) {
 	assert.Equal(t, color.NRGBA{}, color.NRGBAModel.Convert(decoded.At(0, 0)))
 	assert.Equal(t, base.At(1, 0), color.NRGBAModel.Convert(decoded.At(1, 0)))
 }
+
+func TestStudioImageRegionBlendsPartialMaskCoverage(t *testing.T) {
+	base := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	base.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+	candidate := image.NewNRGBA(base.Bounds())
+	candidate.SetNRGBA(0, 0, color.NRGBA{B: 255, A: 255})
+	mask := image.NewNRGBA(base.Bounds())
+	mask.SetNRGBA(0, 0, color.NRGBA{A: 128})
+	encode := func(img image.Image) []byte {
+		var b bytes.Buffer
+		require.NoError(t, png.Encode(&b, img))
+		return b.Bytes()
+	}
+	out, err := CompositeStudioImage(encode(candidate), encode(base), encode(mask))
+	require.NoError(t, err)
+	decoded, err := png.Decode(bytes.NewReader(out))
+	require.NoError(t, err)
+	assert.Equal(t, color.NRGBA{R: 128, B: 127, A: 255}, color.NRGBAModel.Convert(decoded.At(0, 0)))
+}

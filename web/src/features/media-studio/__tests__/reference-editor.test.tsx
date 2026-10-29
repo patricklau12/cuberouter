@@ -112,10 +112,21 @@ test.each(['brush', 'lasso'] as const)(
     fireEvent.click(screen.getByRole('button', { name: tool }))
     const surface = screen.getByLabelText('Reference drawing surface')
     expect(surface).toHaveAttribute('tabindex', '0')
+    expect(surface.querySelector('circle')).toBeNull()
+    act(() => surface.focus())
+    expect(surface).toHaveFocus()
+    expect(surface.querySelector('circle')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Keyboard cursor: X 50%, Y 50%.'
+    )
     fireEvent.keyDown(surface, { key: ' ' })
     fireEvent.keyDown(surface, { key: 'ArrowRight' })
     fireEvent.keyDown(surface, { key: ' ' })
     fireEvent.keyDown(surface, { key: 'ArrowDown' })
+    expect(surface.querySelector('circle')).toHaveAttribute('cx', '0.51')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Keyboard cursor: X 51%, Y 51%.'
+    )
     fireEvent.keyDown(surface, { key: ' ' })
     fireEvent.keyDown(surface, { key: 'Enter' })
     fireEvent.click(screen.getByRole('button', { name: 'Use drawing' }))
@@ -133,6 +144,8 @@ test.each(['brush', 'lasso'] as const)(
         ],
       })
     )
+    act(() => surface.blur())
+    expect(surface.querySelector('circle')).toBeNull()
   }
 )
 

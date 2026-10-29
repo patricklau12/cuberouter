@@ -54,10 +54,28 @@ test.each(['0', '-1', '1.5'])(
       'Enter a positive whole-number User ID.'
     )
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
     expect(get).toHaveBeenCalledTimes(1)
     client.clear()
   }
 )
+
+test('an audit-list request failure gives no claim about generated-image release', async () => {
+  vi.spyOn(api, 'get').mockRejectedValue(new Error('offline'))
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <ImageAudit />
+    </QueryClientProvider>
+  )
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Image auditing is unavailable. Try again later.'
+  )
+  expect(screen.queryByText(/No image was released/)).not.toBeInTheDocument()
+  client.clear()
+})
 
 test('losing root access hides loaded audits and stops further queries', async () => {
   const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { data: [] } })

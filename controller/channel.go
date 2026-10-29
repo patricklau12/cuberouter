@@ -478,7 +478,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("channel cannot be empty")
 	}
 	if channel.Type == constant.ChannelTypeStudioReview {
-		if channel.ChannelInfo.IsMultiKey || ((isAdd || channel.Key != "") && len(channel.Key) < 32) {
+		if channel.ChannelInfo.IsMultiKey || len(channel.Key) < 32 {
 			return fmt.Errorf("image review channels require one service key of at least 32 characters")
 		}
 		if _, err := service.StudioPrivateClient(channel.GetBaseURL(), channel.Other, 45*time.Second); err != nil {
@@ -734,6 +734,12 @@ func AddChannel(c *gin.Context) {
 		}
 		localChannel := addChannelRequest.Channel
 		localChannel.Key = key
+		if localChannel.Type == constant.ChannelTypeStudioReview {
+			if err := validateChannel(localChannel, true); err != nil {
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+				return
+			}
+		}
 		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
 			keyPrefix := localChannel.Key
 			if len(localChannel.Key) > 8 {
@@ -1039,7 +1045,22 @@ func UpdateChannel(c *gin.Context) {
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
-	if err := validateChannel(&channel.Channel, false); err != nil {
+	validationChannel := channel.Channel
+	if validationChannel.Type == constant.ChannelTypeStudioReview || (validationChannel.Type == 0 && originChannel.Type == constant.ChannelTypeStudioReview) {
+		validationChannel.Type = constant.ChannelTypeStudioReview
+		// GORM's struct update preserves zero-valued strings/type and nil URLs.
+		// Validate the effective reviewer without expanding the persisted patch.
+		if validationChannel.Key == "" {
+			validationChannel.Key = originChannel.Key
+		}
+		if validationChannel.BaseURL == nil {
+			validationChannel.BaseURL = originChannel.BaseURL
+		}
+		if validationChannel.Other == "" {
+			validationChannel.Other = originChannel.Other
+		}
+	}
+	if err := validateChannel(&validationChannel, false); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}

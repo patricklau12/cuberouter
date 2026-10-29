@@ -98,10 +98,10 @@ export function ImageAudit() {
       )}
       {rows.isError && (
         <p role='alert'>
-          {t('Image auditing is unavailable. No image was released.')}
+          {t('Image auditing is unavailable. Try again later.')}
         </p>
       )}
-      {rows.isPending && <p role='status'>{t('Loading...')}</p>}
+      {validUser && rows.isPending && <p role='status'>{t('Loading...')}</p>}
       {rows.data?.length === 0 && <p>{t('No image audit records.')}</p>}
       {rows.data?.map((row) => (
         <details key={row.job_id} className='rounded-xl border p-4'>

@@ -6283,6 +6283,8 @@
     "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total.": "每邊使用 256 至 1664 像素，必須是 32 的倍數，總像素不超過 2,097,152。",
     "Image Studio configuration is unavailable. Please try again.": "圖像工作室設定暫時無法使用，請重試。",
     "Enter a positive whole-number User ID.": "請輸入正整數用戶 ID。",
-    "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.": "鍵盤繪圖：方向鍵移動，空格加入點，Enter 完成，Esc 放棄目前筆劃。"
+    "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.": "鍵盤繪圖：方向鍵移動，空格加入點，Enter 完成，Esc 放棄目前筆劃。",
+    "Image auditing is unavailable. Try again later.": "圖片審計暫時無法使用，請稍後再試。",
+    "Keyboard cursor: X {{x}}%, Y {{y}}%.": "鍵盤游標：X {{x}}%，Y {{y}}%。"
   }
 }

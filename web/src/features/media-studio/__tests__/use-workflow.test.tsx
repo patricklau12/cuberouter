@@ -37,6 +37,82 @@ import { workflowAPI } from '../workflow-api'
 
 beforeEach(() => vi.stubGlobal('indexedDB', new IDBFactory()))
 
+test.each(['queue enabled after initial load', 'configuration refresh fails'])(
+  '%s never routes a fresh draft with stale configuration',
+  async (scenario) => {
+    let refresh = false
+    const draft = { ...initialDraft, model: 'qwen-image-2.1', prompt: 'a cat' }
+    vi.spyOn(api, 'get').mockImplementation(async (url) => {
+      if (url === '/api/media-studio/config') {
+        if (refresh && scenario === 'configuration refresh fails') {
+          throw new Error('offline')
+        }
+        return {
+          data: {
+            image_queue_enabled: refresh,
+            image_queue_models: refresh ? [draft.model] : [],
+          },
+        }
+      }
+      if (url.endsWith('/session')) return { data: { epoch: 'boot-a' } }
+      if (url.endsWith('/result')) {
+        return { data: new Blob(['approved'], { type: 'image/png' }) }
+      }
+      return {
+        data: {
+          id: 'fresh-job',
+          epoch: 'boot-a',
+          state: 'completed',
+          ahead: 0,
+          created_at: 1,
+        },
+      }
+    })
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} })
+    const generate = vi.spyOn(workflowAPI, 'generate')
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    const wrapper = (props: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        {props.children}
+      </QueryClientProvider>
+    )
+    const hook = renderHook(() => useWorkflow(1), { wrapper })
+    await waitFor(() =>
+      expect(hook.result.current.configuration.isSuccess).toBe(true)
+    )
+    refresh = true
+    await act(async () => {
+      const result = hook.result.current.generation.mutateAsync(draft)
+      if (scenario === 'configuration refresh fails') {
+        await expect(result).rejects.toThrow('configuration')
+      } else {
+        await expect(result).resolves.toMatchObject({
+          job: { id: 'fresh-job' },
+        })
+      }
+    })
+    if (scenario === 'configuration refresh fails') {
+      expect(post).not.toHaveBeenCalled()
+    } else {
+      expect(post).toHaveBeenCalledWith(
+        IMAGE_JOBS,
+        expect.objectContaining({
+          request: expect.objectContaining({ model: draft.model }),
+        }),
+        expect.anything()
+      )
+    }
+    expect(generate).not.toHaveBeenCalled()
+    hook.unmount()
+    client.clear()
+  }
+)
+
 test('unavailable configuration withholds generation until a successful config fetch', async () => {
   const get = vi.spyOn(api, 'get').mockRejectedValue(new Error('offline'))
   const generate = vi.spyOn(workflowAPI, 'generate')

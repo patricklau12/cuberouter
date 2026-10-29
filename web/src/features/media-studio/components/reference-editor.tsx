@@ -66,6 +66,7 @@ export function ReferenceEditor(props: {
   const [cursor, setCursor] = useState<MarkPoint>({ x: 0.5, y: 0.5 })
   const [keyboardFocus, setKeyboardFocus] = useState(false)
   const keyboardHelp = useId()
+  const cursorPosition = useId()
   const pointer = useRef<number | null>(null)
   const surface = useRef<SVGSVGElement>(null)
   const at = (event: PointerEvent<SVGSVGElement>): MarkPoint | undefined => {
@@ -174,6 +175,17 @@ export function ReferenceEditor(props: {
             'Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.'
           )}
         </p>
+        <p
+          id={cursorPosition}
+          role='status'
+          aria-atomic='true'
+          className='text-muted-foreground text-sm'
+        >
+          {t('Keyboard cursor: X {{x}}%, Y {{y}}%.', {
+            x: Number((cursor.x * 100).toFixed(1)),
+            y: Number((cursor.y * 100).toFixed(1)),
+          })}
+        </p>
         <div
           className='relative mx-auto w-full overflow-hidden rounded-lg border bg-black'
           style={{
@@ -199,7 +211,7 @@ export function ReferenceEditor(props: {
             role='group'
             tabIndex={0}
             aria-label={t('Reference drawing surface')}
-            aria-describedby={keyboardHelp}
+            aria-describedby={`${keyboardHelp} ${cursorPosition}`}
             onFocus={() => setKeyboardFocus(true)}
             onBlur={() => setKeyboardFocus(false)}
             onKeyDown={(event) => {

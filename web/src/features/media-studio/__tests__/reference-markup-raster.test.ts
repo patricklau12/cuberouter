@@ -56,6 +56,9 @@ test.each(['rectangle', 'brush', 'lasso'] as const)(
     context.drawImage(mask, 0, 0)
     const selectedY = tool === 'brush' ? 20 : 30
     expect(context.getImageData(40, selectedY, 1, 1).data[3]).toBe(0)
+    if (tool === 'brush') {
+      expect(context.getImageData(40, 16, 1, 1).data[3]).toBe(0)
+    }
     expect(context.getImageData(90, 90, 1, 1).data[3]).toBe(255)
   }
 )

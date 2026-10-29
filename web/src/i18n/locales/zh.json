@@ -6283,6 +6283,8 @@
     "Use 256–1664 pixels per side, multiples of 32, and at most 2,097,152 pixels in total.": "每边使用 256 至 1664 像素，必须是 32 的倍数，总像素不超过 2,097,152。",
     "Image Studio configuration is unavailable. Please try again.": "图像工作室配置暂不可用，请重试。",
     "Enter a positive whole-number User ID.": "请输入正整数用户 ID。",
-    "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.": "键盘绘图：方向键移动，空格添加点，回车完成，Esc 放弃当前笔划。"
+    "Keyboard drawing: arrow keys move, Space adds a point, Enter finishes, Escape discards.": "键盘绘图：方向键移动，空格添加点，回车完成，Esc 放弃当前笔划。",
+    "Image auditing is unavailable. Try again later.": "图像审计暂不可用，请稍后重试。",
+    "Keyboard cursor: X {{x}}%, Y {{y}}%.": "键盘光标：X {{x}}%，Y {{y}}%。"
   }
 }

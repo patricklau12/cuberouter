@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,6 +76,17 @@ func TestStudioImageDatabaseContracts(t *testing.T) {
 			workers, err = StudioImageWorkerChannels([]int{1}, "image-studio", "existing-model")
 			require.NoError(t, err)
 			assert.Empty(t, workers, "revoked abilities are read from the current database")
+			// Reviewer patch validation must reflect GORM's zero-value update semantics.
+			baseURL := "https://reviewer.invalid/moderate"
+			reviewer := &Channel{Id: 2, Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: "0123456789abcdef0123456789abcdef", BaseURL: &baseURL, Other: "kept-ca-bundle"}
+			require.NoError(t, db.Create(reviewer).Error)
+			require.NoError(t, db.Model(&Channel{Id: 2}).Updates(Channel{Key: "abcdef0123456789abcdef0123456789"}).Error)
+			var patched Channel
+			require.NoError(t, db.First(&patched, 2).Error)
+			assert.Equal(t, constant.ChannelTypeStudioReview, patched.Type)
+			assert.Equal(t, baseURL, patched.GetBaseURL())
+			assert.Equal(t, reviewer.Other, patched.Other)
+			assert.Equal(t, "abcdef0123456789abcdef0123456789", patched.Key)
 			var version string
 			if dialect == "sqlite" {
 				require.NoError(t, db.Raw("select sqlite_version()").Scan(&version).Error)

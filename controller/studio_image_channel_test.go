@@ -47,6 +47,12 @@ func TestStudioReviewerHealthFailuresAreCounted(t *testing.T) {
 	assert.Zero(t, summary.Disabled)
 }
 
+func TestStudioReviewerValidationRejectsEmptyStoredServiceKey(t *testing.T) {
+	base := "http://127.0.0.1:19001/moderate"
+	err := validateChannel(&model.Channel{Type: constant.ChannelTypeStudioReview, BaseURL: &base}, false)
+	require.ErrorContains(t, err, "one service key")
+}
+
 func TestStudioReviewerSaveRejectsFinalMultiKeyState(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	base := "http://127.0.0.1:19001/moderate"
@@ -95,4 +101,78 @@ func TestStudioReviewerSaveRejectsFinalMultiKeyState(t *testing.T) {
 		require.NoError(t, db.First(&unchanged, 8).Error)
 		assert.Equal(t, "reviewer", unchanged.Name)
 	})
+}
+
+func TestStudioReviewerPartialUpdateValidatesStoredTypeAndConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		patch       map[string]any
+		wantSuccess bool
+	}{
+		{"name only preserves valid connection", map[string]any{"name": "renamed"}, true},
+		{"short key without type", map[string]any{"key": "short"}, false},
+		{"invalid CA without type", map[string]any{"other": "invalid certificate"}, false},
+		{"valid key without base URL", map[string]any{"key": strings.Repeat("n", 32)}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupModelListControllerTestDB(t)
+			base := "http://127.0.0.1:19001/moderate"
+			stored := &model.Channel{Id: 8, Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: strings.Repeat("s", 32), BaseURL: &base}
+			require.NoError(t, db.Create(stored).Error)
+			tc.patch["id"] = stored.Id
+			payload, err := common.Marshal(tc.patch)
+			require.NoError(t, err)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewReader(payload))
+			c.Set("id", 1)
+			c.Set("role", common.RoleRootUser)
+			UpdateChannel(c)
+			var result struct {
+				Success bool `json:"success"`
+			}
+			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &result))
+			assert.Equal(t, tc.wantSuccess, result.Success)
+			var after model.Channel
+			require.NoError(t, db.First(&after, stored.Id).Error)
+			assert.Equal(t, constant.ChannelTypeStudioReview, after.Type)
+			assert.Equal(t, base, after.GetBaseURL())
+			if !tc.wantSuccess {
+				assert.Equal(t, stored.Key, after.Key)
+				assert.Empty(t, after.Other)
+			}
+		})
+	}
+}
+
+func TestStudioReviewerBatchValidatesEachKeyBeforeInserting(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		lastKeyLength int
+		wantCount     int64
+	}{
+		{"later short key rejects the entire batch", 31, 0},
+		{"two minimum-length keys are saved independently", 32, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupModelListControllerTestDB(t)
+			base := "http://127.0.0.1:19001/moderate"
+			channel := &model.Channel{Type: constant.ChannelTypeStudioReview, Name: "reviewer", Key: strings.Repeat("v", 32) + "\n" + strings.Repeat("s", tc.lastKeyLength), BaseURL: &base}
+			payload, err := common.Marshal(AddChannelRequest{Mode: "batch", Channel: channel})
+			require.NoError(t, err)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/", bytes.NewReader(payload))
+			c.Request.Header.Set("Content-Type", "application/json")
+			AddChannel(c)
+			var result struct {
+				Success bool `json:"success"`
+			}
+			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &result))
+			assert.Equal(t, tc.wantCount > 0, result.Success)
+			var count int64
+			require.NoError(t, db.Model(&model.Channel{}).Count(&count).Error)
+			assert.Equal(t, tc.wantCount, count, "batch validation runs before any reviewer is inserted")
+		})
+	}
 }

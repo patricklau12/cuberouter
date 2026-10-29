@@ -86,14 +86,15 @@ export function useWorkflow(owner: number) {
     mutationFn: async (
       draft: WorkflowDraft & { resume?: PendingStudioImage }
     ) => {
-      let config = configuration.data
-      if (!draft.resume && !config) {
-        config = (await configuration.refetch()).data
-        if (!config) {
+      let config: ImageQueueConfig | undefined
+      if (!draft.resume) {
+        const latest = await configuration.refetch()
+        if (!latest.isSuccess || !latest.data) {
           throw new Error(
             'Image Studio configuration is unavailable. Please try again.'
           )
         }
+        config = latest.data
       }
       started.current = Date.now()
       setElapsed(0)
