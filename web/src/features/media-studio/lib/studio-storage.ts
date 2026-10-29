@@ -67,8 +67,9 @@ export async function listStudioJobs(owner: number): Promise<WorkflowJob[]> {
 }
 export async function saveStudioJob(
   owner: number,
-  job: WorkflowJob
-): Promise<void> {
+  job: WorkflowJob,
+  expectedPendingKey?: string
+): Promise<boolean> {
   if (
     [...job.images, ...job.request.references].some(
       // 与 workflow-api 的自包含判定一致：只保存 data URL，避免把上游临时网址
@@ -88,9 +89,25 @@ export async function saveStudioJob(
   }
   const db = await studioDatabase(owner)
   try {
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('jobs', 'readwrite'),
+    return await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction(
+          expectedPendingKey ? ['jobs', 'pending'] : ['jobs'],
+          'readwrite'
+        ),
         store = tx.objectStore('jobs')
+      let recoveryChanged = false
+      if (expectedPendingKey) {
+        const pending = tx.objectStore('pending').get('image')
+        pending.onsuccess = () => {
+          const current = pending.result as
+            | { key?: string; cancelRequested?: boolean }
+            | undefined
+          if (current?.key !== expectedPendingKey || current.cancelRequested) {
+            recoveryChanged = true
+            tx.abort()
+          }
+        }
+      }
       store.put(job)
       const all = store.getAll()
       all.onsuccess = () => {
@@ -103,11 +120,18 @@ export async function saveStudioJob(
           if (index >= MAX_ENTRIES || bytes > MAX_BYTES) store.delete(entry.id)
         }
       }
-      tx.oncomplete = () => resolve()
+      tx.oncomplete = () => resolve(true)
       tx.onabort = () =>
-        reject(tx.error ?? new Error('Local history storage is unavailable.'))
-      tx.onerror = () =>
-        reject(tx.error ?? new Error('Local history storage is unavailable.'))
+        recoveryChanged
+          ? resolve(false)
+          : reject(
+              tx.error ?? new Error('Local history storage is unavailable.')
+            )
+      tx.onerror = () => {
+        if (!recoveryChanged) {
+          reject(tx.error ?? new Error('Local history storage is unavailable.'))
+        }
+      }
     })
   } finally {
     db.close()

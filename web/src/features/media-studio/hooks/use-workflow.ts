@@ -114,15 +114,22 @@ export function useWorkflow(owner: number) {
         }
       } else output = await workflowAPI.generate(draft)
       let notice = output.warning ?? ''
+      let recoveryChanged = false
       try {
-        await saveStudioJob(owner, output.job)
-        if (pendingRecord) {
+        recoveryChanged =
+          (await saveStudioJob(owner, output.job, pendingRecord?.key)) === false
+        if (!recoveryChanged && pendingRecord) {
           await acknowledgeStudioImage(owner, output.job.id, pendingRecord.key)
           setPending(undefined)
           setQueueStatus(undefined)
         }
       } catch (error) {
         notice = workflowError(error)
+      }
+      if (recoveryChanged) {
+        throw new Error(
+          'The image job could not complete. Your draft has been kept.'
+        )
       }
       return { ...output, notice }
     },

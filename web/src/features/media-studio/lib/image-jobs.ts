@@ -262,6 +262,22 @@ export async function collectStudioImage(
       ) {
         throw new Error('The model returned no images.')
       }
+      const imageURL = await blobDataURL(result.data)
+      const recovery = await pendingStudioImage(owner)
+      if (recovery?.key !== record.key) {
+        throw new Error(imageJobMessage())
+      }
+      if (recovery.cancelRequested) {
+        await api.post(
+          `${IMAGE_JOBS}/${status.id}/cancel`,
+          {},
+          {
+            signal,
+            skipErrorHandler: true,
+          }
+        )
+        continue
+      }
       return {
         id: status.id,
         created_at: status.created_at,
@@ -270,7 +286,7 @@ export async function collectStudioImage(
           {
             id: newId(),
             mime: 'image/png',
-            url: await blobDataURL(result.data),
+            url: imageURL,
           },
         ],
         elapsed_ms: Date.now() - record.started,

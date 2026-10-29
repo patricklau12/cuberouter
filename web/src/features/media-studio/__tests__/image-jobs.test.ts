@@ -30,6 +30,7 @@ import {
   type ImageJobStatus,
   type PendingStudioImage,
 } from '../lib/image-jobs'
+import { listStudioJobs, saveStudioJob } from '../lib/studio-storage'
 import { initialDraft } from '../lib/workflow'
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
@@ -212,3 +213,55 @@ test('a late acknowledgement from an old tab cannot erase a newer recovery recor
   await acknowledgeStudioImage(1, 'old-job', record.key)
   expect((await pendingStudioImage(1))?.key).toBe('newer-request-1234')
 })
+
+test('cancellation recorded while downloading discards the received PNG before creating artwork', async () => {
+  await pendingStudioImage(1, record)
+  http.get
+    .mockResolvedValueOnce({ data: { ...status, state: 'completed' } })
+    .mockImplementationOnce(async () => {
+      await pendingStudioImage(1, { ...record, cancelRequested: true })
+      return { data: new Blob(['reviewed'], { type: 'image/png' }) }
+    })
+    .mockResolvedValueOnce({
+      data: { ...status, state: 'cancelled', cancel_requested: true },
+    })
+  http.post.mockResolvedValue({})
+  await expect(
+    collectStudioImage(1, record, new AbortController().signal, vi.fn())
+  ).rejects.toThrow()
+  expect(http.post).toHaveBeenCalledWith(
+    `${IMAGE_JOBS}/job-a/cancel`,
+    {},
+    expect.anything()
+  )
+})
+
+test.each([
+  { ...record, cancelRequested: true },
+  { ...record, key: 'another-request-1234' },
+])(
+  'history commits reject cancelled or replaced recovery records atomically: $key $cancelRequested',
+  async (current) => {
+    await pendingStudioImage(1, current)
+    const saved = await saveStudioJob(
+      1,
+      {
+        id: 'job-a',
+        created_at: 1,
+        request: record.draft,
+        elapsed_ms: 10,
+        images: [
+          {
+            id: 'approved',
+            mime: 'image/png',
+            url: 'data:image/png;base64,YQ==',
+          },
+        ],
+      },
+      record.key
+    )
+    expect(saved).toBe(false)
+    expect(await listStudioJobs(1)).toEqual([])
+    expect((await pendingStudioImage(1))?.key).toBe(current.key)
+  }
+)
