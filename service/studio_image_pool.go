@@ -144,6 +144,7 @@ func ProbeStudioImageWorker(ctx context.Context, channel *model.Channel) bool {
 	if err != nil {
 		return false
 	}
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false

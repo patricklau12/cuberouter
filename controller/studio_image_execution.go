@@ -237,6 +237,7 @@ func cancelStudioImageWorker(ctx context.Context, channel *model.Channel, job st
 	if err != nil {
 		return
 	}
+	defer client.CloseIdleConnections()
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {

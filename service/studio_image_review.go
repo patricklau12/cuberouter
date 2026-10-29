@@ -183,6 +183,7 @@ func requestStudioReview(ctx context.Context, channel model.Channel, image []byt
 	if err != nil || len(channel.Key) < 32 {
 		return StudioReview{}, failure, false
 	}
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, channel.GetBaseURL(), bytes.NewReader(image))
 	if err != nil {
 		return StudioReview{}, failure, false
